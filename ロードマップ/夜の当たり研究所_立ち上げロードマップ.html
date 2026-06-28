@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>初期アカウント立ち上げロードマップ｜夜の当たり研究所</title>
+<style>
+:root{--bg:#0a0e14;--panel:#151a23;--panel2:#1c2230;--line:#2a3344;--txt:#e7ecf3;--sub:#9fb0c3;--accent:#1d9bf0;--green:#00ba7c;--warn:#f4a52a;--danger:#f4385a;--gold:#ffd24a}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:radial-gradient(1200px 600px at 50% -10%,#16202e 0%,var(--bg) 60%);color:var(--txt);font-family:-apple-system,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;line-height:1.7;padding:36px 14px}
+.wrap{max-width:880px;margin:0 auto}
+header{text-align:center;margin-bottom:18px}
+.x-logo{font-weight:900;font-size:26px;background:#000;color:#fff;width:50px;height:50px;display:inline-flex;align-items:center;justify-content:center;border-radius:13px;margin-bottom:12px;border:1px solid var(--line)}
+h1{font-size:24px;font-weight:800}
+.lead{color:var(--sub);margin-top:8px;font-size:14px}
+.acct{display:inline-flex;gap:8px;align-items:center;margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:13px}
+.acct b{color:#fff}.acct .id{color:var(--accent)}
+.concept{max-width:620px;margin:12px auto 0;background:#10283b;border:1px solid #244a6b;border-radius:12px;padding:12px 16px;color:#cfe5f7;font-size:13px;white-space:pre-wrap;text-align:left}
+.prog{position:sticky;top:0;z-index:5;background:#0a0e14ee;backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:18px 0 24px;display:flex;align-items:center;gap:12px}
+.bar{flex:1;height:9px;background:var(--panel2);border-radius:999px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--green));transition:.3s}
+.prog small{color:var(--sub);font-size:12px;white-space:nowrap}
+.reset{background:none;border:1px solid var(--line);color:var(--sub);border-radius:8px;padding:4px 9px;font-size:11px;cursor:pointer}
+.phase{margin:20px 0;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--panel)}
+.phase>h2{display:flex;align-items:center;gap:12px;padding:15px 18px;font-size:18px;background:linear-gradient(135deg,#10283b,#141b29);border-bottom:1px solid var(--line)}
+.phase .badge{flex:none;width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:800;background:var(--panel2);border:1px solid var(--line);font-size:14px}
+.phase .when{margin-left:auto;font-size:11px;color:var(--sub);background:#0e2233;border:1px solid #244a6b;padding:3px 10px;border-radius:999px}
+.body{padding:12px 18px 18px}
+.subhead{font-size:12px;font-weight:800;color:#7fb6e6;letter-spacing:.4px;margin:16px 0 6px;border-left:3px solid var(--accent);padding-left:8px}
+.task{display:flex;gap:11px;padding:9px 0;border-bottom:1px dashed #232b39;align-items:flex-start}
+.task:last-child{border-bottom:0}
+.task input{appearance:none;flex:none;width:21px;height:21px;margin-top:2px;border:2px solid #3a475c;border-radius:6px;cursor:pointer;position:relative;transition:.15s}
+.task input:checked{background:var(--green);border-color:var(--green)}
+.task input:checked::after{content:"\2713";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#04150f;font-weight:900;font-size:13px}
+.task label{cursor:pointer;font-size:14.5px}
+.task.done label{color:#5f6f82;text-decoration:line-through}
+.copy{margin:10px 0;border:1px solid var(--line);border-radius:11px;background:var(--panel2);overflow:hidden}
+.copy .top{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#0f1622;border-bottom:1px solid var(--line);font-size:12px;color:var(--sub)}
+.copy .top .t{font-weight:700;color:#cdd9e7}
+.copy button{margin-left:auto;background:var(--accent);color:#fff;border:0;border-radius:7px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer}
+.copy button.ok{background:var(--green)}
+.copy pre{padding:12px 14px;white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:13.5px;color:#eef4fb}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:620px){.grid{grid-template-columns:1fr}}
+.thlabel{font-size:12px;color:var(--sub);margin:14px 0 4px;font-weight:700}
+.thread{border:1px solid var(--line);border-radius:12px;padding:10px;background:#10151e;margin-bottom:10px}
+.msg{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0}
+.msg.main{border-color:#244a6b}.msg.sub{border-color:#5a4a1d}
+.msg.hot{border-color:var(--green);box-shadow:0 0 0 1px #00ba7c55}
+.mhead{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.role{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px}
+.role.main{background:#0e2233;color:#6ec5ff;border:1px solid #244a6b}
+.role.sub{background:#241c10;color:#f0c06a;border:1px solid #5a4a1d}
+.msg .mhead button{margin-left:auto;background:var(--accent);color:#fff;border:0;border-radius:7px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer}
+.msg .mhead button.ok{background:var(--green)}
+.mtext{font-size:13.5px;color:#eef4fb;white-space:pre-wrap}
+.note{margin:12px 0;border-radius:11px;padding:11px 14px;font-size:13px}
+.note.warn{background:#251f10;border:1px solid #5a4a1d;color:#f0dca0}
+.note.danger{background:#2a1119;border:1px solid #5e2031;color:#ffb3c1}
+.note.info{background:#0e2233;border:1px solid #244a6b;color:#bfe0fb}
+.note b{color:#fff}
+footer{margin-top:26px;border-top:1px solid var(--line);padding-top:16px;color:var(--sub);font-size:12.5px;text-align:center}
+</style></head><body><div class="wrap">
+<header>
+  <div class="x-logo">&#120143;</div>
+  <h1>初期アカウント立ち上げロードマップ</h1>
+  <p class="lead">各フェーズは「✅やること」と「📋コピペ素材」に分けてあります。</p>
+  <div class="acct">メイン：<b>夜の当たり研究所</b> <span class="id">@yoru_atari</span></div>
+  <div class="concept">成人・FANZAの“当たり作品”を見抜く目利き＋夜のあるある語り。
+R18・無リンクで人間味と信用を育てるメイン集客アカ。
+ジャンルは「当たり目利き × 夜のあるある」に固定。</div>
+</header>
+<div class="prog"><div class="bar"><i id="barFill"></i></div><small id="progTxt">0 / 0 完了</small><button class="reset" onclick="resetAll()">リセット</button></div>
+<div class="phase"><h2><span class="badge">0</span>アカウント設計（コンセプト→名前・ID・アイコン）<span class="when">最初に</span></h2><div class="body"><div class="note info">まず「<b>何のアカウントか</b>」を1つに固める。発信は<b>1ジャンルに統一</b>（ブレるとアルゴが学習できず伸びない）。</div><div class="subhead">✅ やること</div><div class="task"><input type="checkbox" id="t1"><label for="t1"><b>コンセプトを1行で決める</b>（誰に・何を・どんなキャラ）</label></div><div class="task"><input type="checkbox" id="t2"><label for="t2"><b>表示名</b>を決める（検索/フック語を自然に）</label></div><div class="task"><input type="checkbox" id="t3"><label for="t3"><b>@ID</b>を決める（半角英数4〜15字／被ったら末尾に数字・_）</label></div><div class="task"><input type="checkbox" id="t4"><label for="t4"><b>アイコン・ヘッダーの方向性</b>を決める（<b>アダルト画像は不可</b>）</label></div><div class="task"><input type="checkbox" id="t5"><label for="t5"><b>bioの骨子</b>を決める（専門性＋R18注記）</label></div><div class="subhead">📋 コピペ素材</div><div class="grid"><div class="copy cpwrap"><div class="top"><span class="t">コンセプト</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">成人・FANZAの“当たり作品”を見抜く目利き＋夜のあるある語り。
+R18・無リンクで人間味と信用を育てるメイン集客アカ。
+ジャンルは「当たり目利き × 夜のあるある」に固定。</pre></div><div class="copy cpwrap"><div class="top"><span class="t">表示名（案）</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">夜の当たり研究所</pre></div><div class="copy cpwrap"><div class="top"><span class="t">@ID 候補（上から空きを試す）</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">yoru_atari
+atari_labo
+atari_kenkyu
+yoru_atari01</pre></div><div class="copy cpwrap"><div class="top"><span class="t">アイコン/ヘッダーの方向性メモ</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">アイコン：露出なしの雰囲気（ネオン/夜景/“当たり”ロゴ風）
+ヘッダー：夜・バー・ネオン等のムード系＋一言キャッチ
+※プロフ画像・ヘッダーにアダルト画像は規約NG</pre></div></div><div class="note info">途中でジャンルをブレさせない（関心度評価が下がる）。コンセプトに沿った投稿だけを出す。</div></div></div>
+<div class="phase"><h2><span class="badge">1</span>初期設定（登録・公開・プロフ反映）<span class="when">Day 0</span></h2><div class="body"><div class="subhead">✅ やること</div><div class="task"><input type="checkbox" id="t6"><label for="t6">表示言語を<b>日本語</b>に（設定→アクセシビリティ・表示と言語→言語）</label></div><div class="task"><input type="checkbox" id="t7"><label for="t7"><b>鍵を外す（公開）</b>：設定→プライバシーと安全→オーディエンスとタグ付け→「ポストを非公開」OFF</label></div><div class="task"><input type="checkbox" id="t8"><label for="t8"><b>メール＋電話番号認証</b>を済ませる</label></div><div class="task"><input type="checkbox" id="t9"><label for="t9"><b>センシティブ設定ON</b>（設定→プライバシーと安全→自分のメディア設定）</label></div><div class="task"><input type="checkbox" id="t10"><label for="t10">フェーズ0で決めた<b>アイコン・ヘッダー・表示名</b>を反映する</label></div><div class="task"><input type="checkbox" id="t11"><label for="t11"><b>bio</b>を設定する（素材からコピー）</label></div><div class="task"><input type="checkbox" id="t12"><label for="t12"><b>固定ポストを1本</b>投稿して固定する（素材からコピー）</label></div><div class="subhead">📋 コピペ素材</div><div class="grid"><div class="copy cpwrap"><div class="top"><span class="t">自己紹介（bio）</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">サンプル数秒で“当たり”を見抜くのが特技。
+ハズさない一本と、夜のあるある・本音を静かに置いていく場所。
+語り多め／宣伝は控えめ。
+📍R18・センシティブ注意｜18歳未満はそっと退場で</pre></div><div class="copy cpwrap"><div class="top"><span class="t">固定ポスト案A</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">はじめまして。
+サンプル数秒で“当たり”を見抜くのだけは自信あります。
+ハズさない一本と、夜のあるある・本音をゆるく置いてく場所です。
+気が合いそうならフォローどうぞ。</pre></div><div class="copy cpwrap"><div class="top"><span class="t">固定ポスト案B</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">“当たり”だけ静かに置いていく研究所、はじめます。
+派手な宣伝はしません。良かったやつと、夜の本音だけ。
+わかる人に届けばいい。</pre></div></div><div class="note danger">⚠️ 固定ポスト含め、<b>作成後1〜2週間はリンクを貼らない</b>（アカウントエイジング）。</div></div></div>
+<div class="phase"><h2><span class="badge">2</span>トラスト構築（防衛最優先）<span class="when">Day 1〜10</span></h2><div class="body"><div class="note info">ボット判定（初期シャドウバン）を避ける期間。<b>量より挙動の安定</b>。下の上限を死守する。</div><div class="subhead">✅ やること</div><div class="task"><input type="checkbox" id="t13"><label for="t13">投稿は<b>1日3〜5件が上限</b>（目標ではない）。目安は<b>2〜4本を時間分散</b>。無理に5本出さない／連投しない</label></div><div class="task"><input type="checkbox" id="t14"><label for="t14">リプは<b>10〜20件/日</b>、いいねは<b>50〜80件/日</b>。数分ごとの連打はしない</label></div><div class="task"><input type="checkbox" id="t15"><label for="t15">フォローは少しずつ（数十分で数十件はサーチバン級）</label></div><div class="task"><input type="checkbox" id="t16"><label for="t16"><b>外部リンクは本投稿に貼らない</b>（リンクはサブ→引用に隔離）</label></div><div class="task"><input type="checkbox" id="t17"><label for="t17">中身は<b>つぶやき（あるある・問いかけ）中心</b>で会話を貯める（スキル x-tease-posts）</label></div><div class="subhead">📋 コピペ素材</div><div class="grid"><div class="copy cpwrap"><div class="top"><span class="t">つぶやき例1</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">終わった瞬間に部屋の散らかり具合が急に目に入ってくるの、あの落差なんなんだろうな。賢者すぎて掃除始めそうになる。</pre></div><div class="copy cpwrap"><div class="top"><span class="t">つぶやき例2</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">いい雰囲気の真っ最中に宅配のインターホン鳴って、二人で息止めたまま無言になった。あの数十秒、人生でいちばん長かった。</pre></div><div class="copy cpwrap"><div class="top"><span class="t">つぶやき例3</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">ちゃんとムード作る派と、勢いで行っちゃう派、どっちが正解だと思う？毎回迷って結局グダる。</pre></div><div class="copy cpwrap"><div class="top"><span class="t">つぶやき例4</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">結局さ、見た目より“スイッチ入った瞬間の豹変”に弱いんだよな。あのギャップだけで一週間戦える。わかる人いる？</pre></div></div><div class="note info">シャドウバン判定サイン：①ログアウト/別垢で検索に出ない ②リプが「その他の返信」に隠れる ③インプが常に1桁〜十数。</div><div class="note warn">疑ったら<b>24〜48時間 完全放置</b>（いいね・リポストも停止）。プロフ/ID変更・フォロー解除の連打は逆効果。</div></div></div>
+<div class="phase"><h2><span class="badge">3</span>初速ハック（毎投稿のやり方）★最重要<span class="when">毎投稿</span></h2><div class="body"><div class="note info">勝負は<b>投稿後2時間（特に最初の15分）</b>。15分でエンゲージ率3%超なら拡大、1%未満で配信停止。</div><div class="subhead">✅ やること</div><div class="task"><input type="checkbox" id="t18"><label for="t18"><b>ゴールデンタイム</b>に投稿：20〜22時（最強）／12〜13時／7〜9時／深夜帯</label></div><div class="task"><input type="checkbox" id="t19"><label for="t19">投稿に<b>問いかけ・アンケート</b>を仕込む（リプを誘発）</label></div><div class="task"><input type="checkbox" id="t20"><label for="t20">投稿後<b>1〜2時間は来たリプに即返信</b>（自分のリプ往復＝<b>150倍</b>）</label></div><div class="task"><input type="checkbox" id="t21"><label for="t21">初期は<b>同ジャンルの他者へ自分から気の利いたリプ／引用</b>で巻き込む</label></div><div class="task"><input type="checkbox" id="t22"><label for="t22"><b>画像2〜4枚 or 動画優先</b>。冒頭1〜2行に強フック</label></div><div class="task"><input type="checkbox" id="t23"><label for="t23">「保存推奨」で<b>ブックマーク誘導</b>（いいねの3倍）</label></div><div class="subhead">📋 コピペ素材</div><div class="grid"><div class="copy cpwrap"><div class="top"><span class="t">リプ定型1</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">これは完全に“当たり”の顔してる。表情だけで持っていかれた。</pre></div><div class="copy cpwrap"><div class="top"><span class="t">リプ定型2</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">わかる、こういうギャップ系に一生勝てないんですよね…。</pre></div><div class="copy cpwrap"><div class="top"><span class="t">問いかけ例</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">今年見た中で“事故レベルに良かった”やつ、みんなのも教えてくれない？</pre></div></div><div class="note info">スコア早見（いいね=1倍）：自分のリプ往復<b>150倍</b> ＞ 他者リプ27倍 ＞ プロフクリック24倍 ＞ 滞在2分20倍 ＞ ブクマ3倍 ＞ リポスト2倍 ＞ いいね1倍。</div></div></div>
+<div class="phase"><h2><span class="badge">💬</span>リプ設計（会話ラリーで150倍を作る）<span class="when">投稿後すぐ</span></h2><div class="body"><div class="note info">初期はリプが付きにくい。<b>サブ垢で“最初のリプ”を付けて口火を切り、メインが返す</b>＝リプ往復(150倍)を自作する。<b>下の「会話例」が“1投稿＝この返信の流れ”の型</b>。</div><div class="subhead">✅ やること</div><div class="task"><input type="checkbox" id="t24"><label for="t24">流れは「メイン投稿 → サブが返信 → メインが即返信」（下の会話例の通り）</label></div><div class="task"><input type="checkbox" id="t25"><label for="t25">②サブの返信は<b>数分〜十数分あけて</b>。毎回ちがう文面にする</label></div><div class="task"><input type="checkbox" id="t26"><label for="t26"><b>毎投稿ではやらない</b>（やりすぎ＝協調的不正行為の判定リスク）</label></div><div class="task"><input type="checkbox" id="t27"><label for="t27">来た<b>“本物のリプ”には必ず即返信</b>（サブはあくまで呼び水）</label></div><div class="subhead">📋 コピペ素材</div><div class="thlabel">会話例1（1投稿＝この返信の流れ）</div><div class="thread"><div class="msg cpwrap main" style="margin-left:0px"><div class="mhead"><span class="role main">① メイン投稿</span><button onclick="cp(this)">コピー</button></div><div class="mtext cptext">今年“事故レベルに良かった”やつ、みんなのも教えてくれない？</div></div><div class="msg cpwrap sub" style="margin-left:18px"><div class="mhead"><span class="role sub">② サブが返信（無リンク）</span><button onclick="cp(this)">コピー</button></div><div class="mtext cptext">自分は雰囲気で選ぶ派です。最近のほんと当たり多くないですか？</div></div><div class="msg cpwrap main hot" style="margin-left:36px"><div class="mhead"><span class="role main">③ メインが返信 ＝リプ往復150倍</span><button onclick="cp(this)">コピー</button></div><div class="mtext cptext">それ語れる人いて嬉しい。あとでゆっくり話そう</div></div><div class="msg cpwrap sub" style="margin-left:54px"><div class="mhead"><span class="role sub">④ サブがもう一言</span><button onclick="cp(this)">コピー</button></div><div class="mtext cptext">次のおすすめも気になります</div></div><div class="msg cpwrap main" style="margin-left:72px"><div class="mhead"><span class="role main">⑤ メインがまた返信</span><button onclick="cp(this)">コピー</button></div><div class="mtext cptext">了解、近いうちに“今週の当たり”出すわ</div></div></div><div class="thlabel">会話例2（1投稿＝この返信の流れ）</div><div class="thread"><div class="msg cpwrap main" style="margin-left:0px"><div class="mhead"><span class="role main">① メイン投稿</span><button onclick="cp(this)">コピー</button></div><div class="mtext cptext">当たり作品の見分け方、結局なにで判断してる？俺はまず表情なんだけど。</div></div><div class="msg cpwrap sub" style="margin-left:18px"><div class="mhead"><span class="role sub">② サブが返信（無リンク）</span><button onclick="cp(this)">コピー</button></div><div class="mtext cptext">わかる、表情大事。この前見たやつ完全にやられました…</div></div><div class="msg cpwrap main hot" style="margin-left:36px"><div class="mhead"><span class="role main">③ メインが返信 ＝リプ往復150倍</span><button onclick="cp(this)">コピー</button></div><div class="mtext cptext">表情派、同志だ。サンキュー！</div></div></div><div class="note danger">この会話シードは<b>無リンク</b>。リンクを貼るのはエイジング後の「サブ→メイン引用」だけ（フェーズ5）。</div></div></div>
+<div class="phase"><h2><span class="badge">4</span>集客投稿を混ぜる（無リンク）<span class="when">Day 10〜</span></h2><div class="body"><div class="subhead">✅ やること</div><div class="task"><input type="checkbox" id="t28"><label for="t28"><b>/fanza-content</b> を実行して当日の投稿フォルダを生成</label></div><div class="task"><input type="checkbox" id="t29"><label for="t29"><b>画像/動画を目視で選ぶ</b>（未成年に見える/制服強調は必ず除外＝ゼロトレランス）</label></div><div class="task"><input type="checkbox" id="t30"><label for="t30"><b>メインから無リンクで投稿</b>（センシティブON・動画優先）＋投稿後2時間は即リプ</label></div><div class="subhead">📋 コピペ素材</div><div class="grid"><div class="copy cpwrap"><div class="top"><span class="t">メイン本文1</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">ランキング上位なの、見て一発で納得した。数字は嘘つかない。
+本編はサンプルの比じゃないらしい。</pre></div><div class="copy cpwrap"><div class="top"><span class="t">メイン本文2</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">【速報】これ今年のトップ争い、完全に入ってきた。
+表情だけで持っていく子は強い。</pre></div></div><div class="note info">リンクは貼らない。続きを聞かれたら<b>サブ投稿を引用</b>する形で流す（次のフェーズ）。</div></div></div>
+<div class="phase"><h2><span class="badge">5</span>リンク導線（サブ→メイン引用）<span class="when">エイジング後</span></h2><div class="body"><div class="subhead">✅ やること</div><div class="task"><input type="checkbox" id="t31"><label for="t31"><b>サブ</b>でアフィリンク付き投稿（PCから・リンクは【】囲み）</label></div><div class="task"><input type="checkbox" id="t32"><label for="t32"><b>メイン</b>でそのサブ投稿を<b>引用</b>（メイン本体は無リンク）</label></div><div class="task"><input type="checkbox" id="t33"><label for="t33">時間をあけて<b>賑やかしを1〜2件</b>（サブ投稿へのリプ・文面は微調整）</label></div><div class="subhead">📋 コピペ素材</div><div class="grid"><div class="copy cpwrap"><div class="top"><span class="t">サブ本文（リンクは差し替え）</span><button onclick="cp(this)">コピー</button></div><pre class="cptext">見たい人用に置いとく↓
+【ここに fanza_auto のアフィリンクを貼る】</pre></div></div></div></div>
+<div class="phase"><h2><span class="badge">🔁</span>毎日のルーティン（慣れたらこれだけ）<span class="when">Daily</span></h2><div class="body"><div class="subhead">✅ やること</div><div class="task"><input type="checkbox" id="t34"><label for="t34">つぶやき2〜4本（時間を散らす・毎回ちがう文）</label></div><div class="task"><input type="checkbox" id="t35"><label for="t35">同ジャンルへ気の利いたリプ3〜5件</label></div><div class="task"><input type="checkbox" id="t36"><label for="t36">集客投稿1本（Sensitive・無リンク）＋投稿後2時間は即リプ</label></div><div class="task"><input type="checkbox" id="t37"><label for="t37">必要なときだけ サブ→メイン引用 でリンク導線</label></div><div class="task"><input type="checkbox" id="t38"><label for="t38">アナリティクスでインプ/エンゲージ確認→伸びた型に寄せる</label></div><div class="note danger">毎日の絶対NG：<b>未成年連想ワード</b>／<b>露骨表現・煽りすぎ</b>（通報1回＝いいね約738件ぶんのマイナス）／<b>メインに直リンク</b>／<b>同一文・画像の使い回し</b>／<b>機械的な等間隔投稿</b></div></div></div>
+<footer>チェック状態はこのブラウザに自動保存されます（リセットで全解除）。<br>元ナレッジ：ナレッジ/アカウント立ち上げ/ ／ 数理：ナレッジ/集客・導線/アルゴリズム解析（2026）</footer>
+</div>
+<script>
+function cp(btn){var el=btn.closest('.cpwrap').querySelector('.cptext');navigator.clipboard.writeText(el.innerText).then(function(){var o=btn.textContent;btn.textContent='コピー\u2713';btn.classList.add('ok');setTimeout(function(){btn.textContent=o;btn.classList.remove('ok')},1200)})}
+var KEY='x-launch-roadmap-'+(document.title);
+var boxes=[].slice.call(document.querySelectorAll('.task input[type=checkbox]'));
+var saved=JSON.parse(localStorage.getItem(KEY)||'{}');
+function update(){var done=0;boxes.forEach(function(b){if(b.checked){done++;b.closest('.task').classList.add('done')}else b.closest('.task').classList.remove('done')});var pct=boxes.length?Math.round(done/boxes.length*100):0;document.getElementById('barFill').style.width=pct+'%';document.getElementById('progTxt').textContent=done+' / '+boxes.length+' 完了（'+pct+'%）'}
+boxes.forEach(function(b){if(saved[b.id])b.checked=true;b.addEventListener('change',function(){saved[b.id]=b.checked;localStorage.setItem(KEY,JSON.stringify(saved));update()})});
+function resetAll(){if(confirm('チェックを全部リセットしますか？')){localStorage.removeItem(KEY);boxes.forEach(function(b){b.checked=false});update()}}
+update();
+</script></body></html>

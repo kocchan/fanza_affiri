@@ -1,0 +1,34 @@
+{
+  "site": "FANZA",
+  "service": "digital",
+  "floor": "videoc",
+  "sort": "rank",
+
+  "fetch_count": 100,
+  "posts_per_day": 20,
+  "avoid_repeats": true,
+  "sample_images_per_item": 20,
+  "images_per_post": 4,
+  "post_slots": ["夜", "朝"],
+
+  "download_movie": true,
+  "movie_quality": "dm_w",
+  "movie_all": false,
+  "extract_safe": true,
+  "safe_frames_top_n": 10,
+
+  "screen_minor_risk": true,
+  "safe_level": "strict",
+
+  "aff_link": {
+    "af_id": "mokumoku555-001",
+    "ch": "reward_ranking",
+    "ch_id": "link"
+  },
+
+  "accounts": {
+    "main": "MAIN",
+    "sub": "SUB",
+    "boosters": ["B1", "B2", "B3"]
+  }
+}

@@ -1,0 +1,22 @@
+# 秘密情報（絶対にcommitしない）
+.env
+.env.*
+
+# ダウンロードした画像・動画（容量大・再生成可能）
+fanza_auto/works/
+fanza_auto/output/
+
+# 競合分析スクリーンショット（画像ファイル）
+競合分析/*.png
+競合分析/*.jpg
+競合分析/*.jpeg
+競合分析/_zoom/
+
+# OS生成ファイル
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
