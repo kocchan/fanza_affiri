@@ -33,6 +33,21 @@
 
 ## ✅ 完了
 
+- [x] **1作品だけを動画つきで開くモード（再生・切り抜き・保存）**
+  `build_board.py <cid>` で単一作品ボード `works/board_<cid>.html` を生成（動画プレーヤー＋切り抜き
+  ツールバー＋保存ボタン＋既存 `cut_*.mp4` 一覧）。`serve_board.py <cid>` が単一ボードを生成→works/配信
+  （動画シーク＝Rangeリクエスト対応）→ブラウザで開き、「✂切り抜く」を `/__cut`→`cut_video.py` で処理して
+  `cut_<開始>-<終了>.mp4` を保存。パス外アクセス防止・BrokenPipe無視。自動テストで配信200・動画206・
+  切り抜き成功・パス外拒否を確認。README/SKILL.md 更新。
+- [x] **投稿ボードを刷新（テキスト専用・作品情報を読み込む新ボード）**
+  旧ダッシュボード（`serve.py`／`make_post_html.py`／`works/index.html`）を `fanza_auto/_archive/board_v1/` に
+  動く状態でアーカイブ（パス定数のみ修正・py_compile確認）。画像の切り抜き・A/B判定は今も旧ボード担当。
+  新規に4スクリプト：`common.py`（設定・リンク整形・works走査の共通土台）／`meta.py`（cidから作品情報を
+  取り直し `item.json` 保存。既存41作品backfill済み）／`post_text.py`（レビュー評価・収録時間・発売日・
+  安全ジャンルから作品ごとに投稿文を1本生成。型を自動選択）／`build_board.py`（`works/board.html` 生成・
+  サーバー不要・コピーボタン・検索・投稿済み管理・レビュー順）。`fetch_and_build.py` も `item.json` を保存する
+  ように接続し設定を `common.py` に集約。★本文に出すジャンルは `SAFE_GENRES` 許可リスト方式で露骨語・未成年
+  連想語を遮断（1640本生成でNG混入ゼロ確認）。該当作品はボードで「画像は要注意」警告。README/SKILL.md 更新。
 - [x] **不要な機能の削除（リファクタリング）**
   デッドコードを洗い出して削除（約230行）。`fetch_and_build.py` の旧ランキング単独生成器3関数＋未使用引数 `today`、
   `config.json` の `ranking_main_images`、`safe_criteria.py` の `ENTICING_CLASSES`、`make_post_html.py` の

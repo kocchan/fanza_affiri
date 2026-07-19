@@ -508,7 +508,8 @@ def main(argv):
     if len(argv) >= 2:
         works_dir = os.path.abspath(argv[1])
     else:
-        works_dir = os.path.join(here, "..", "works")
+        # アーカイブ済み（_archive/board_v1/）のため、fanza_auto までは2つ上に遡る。
+        works_dir = os.path.join(here, "..", "..", "works")
         os.makedirs(works_dir, exist_ok=True)
 
     if not os.path.isdir(works_dir):

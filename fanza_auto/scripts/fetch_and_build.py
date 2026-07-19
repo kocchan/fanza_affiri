@@ -28,16 +28,15 @@ import shutil
 import random
 import datetime
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 import requests
 
+import common as C
 import templates as T
 import safe_criteria as SC
 from extract_safe_frames import extract_safe_frames
 
 ROOT = Path(__file__).resolve().parent.parent
-PROJECT_ROOT = ROOT.parent
 API_ENDPOINT = "https://api.dmm.com/affiliate/v3/ItemList"
 ACTRESS_ENDPOINT = "https://api.dmm.com/affiliate/v3/ActressSearch"
 MOVIE_HOST = "https://cc3001.dmm.co.jp/litevideo/freepv"
@@ -52,59 +51,9 @@ MOVIE_HEADERS = {
 # ──────────────────────────────────────────────
 # 設定読み込み
 # ──────────────────────────────────────────────
-def load_env(env_path: Path) -> dict:
-    """シンプルな .env パーサ（KEY=VALUE 形式）"""
-    data = {}
-    if not env_path.exists():
-        return data
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        data[k.strip()] = v.strip().strip('"').strip("'")
-    return data
-
-
-def load_config() -> dict:
-    cfg_path = ROOT / "config.json"
-    cfg = {
-        "site": "FANZA",
-        "service": "digital",
-        "floor": "videoa",
-        "sort": "rank",
-        "fetch_count": 100,
-        "posts_per_day": 20,
-        "avoid_repeats": True,
-        "sample_images_per_item": 20,
-        "images_per_post": 10,
-        "post_slots": ["夜", "朝"],
-        "download_movie": True,
-        "movie_quality": "dm_w",
-        "movie_all": False,
-        "extract_safe": True,
-        "safe_frames_top_n": 10,
-        # アフィリエイトリンクの差し替え設定（APIが返すURLの af_id / ch / ch_id を上書き）
-        "aff_link": {
-            "af_id": "mokumoku555-001",
-            "ch": "reward_ranking",
-            "ch_id": "link",
-        },
-        "accounts": {"main": "MAIN", "sub": "SUB",
-                     "boosters": ["B1", "B2", "B3"]},
-    }
-    if cfg_path.exists():
-        cfg.update(json.loads(cfg_path.read_text(encoding="utf-8")))
-
-    env = load_env(PROJECT_ROOT / ".env")
-    api_id = cfg.get("api_id") or env.get("DMM_API_ID")
-    aff_id = cfg.get("affiliate_id") or env.get("DMM_AFFILIATE_ID")
-    if not api_id or not aff_id:
-        sys.exit("✗ API_ID / AFFILIATE_ID が見つかりません。"
-                 ".env か config.json に設定してください。")
-    cfg["api_id"] = api_id
-    cfg["affiliate_id"] = aff_id
-    return cfg
+# 設定まわりの実体は common.py に集約している（meta.py / build_board.py と共用）。
+load_env = C.load_env
+load_config = C.load_config
 
 
 # ──────────────────────────────────────────────
@@ -377,6 +326,10 @@ def build_post(item, rank, cfg, out_dir, detector,
     work = folder / "_src"             # 作業用（最後に削除）
     work.mkdir(exist_ok=True)
 
+    # 作品メタ情報を保存する。ボード（board.html）と投稿文の生成がこれを読む。
+    # 後から拾い直すこともできる（meta.py）が、取得時に残しておくのが確実。
+    C.write_item(folder, dict(item, affiliateURL=aff_url))
+
     print(f"▶ #{rank} {title} ({cid}) 〔型:{pattern}〕")
 
     # 公式サンプル画像
@@ -428,20 +381,8 @@ def build_post(item, rank, cfg, out_dir, detector,
 # ──────────────────────────────────────────────
 # アフィリエイトリンクの差し替え
 # ──────────────────────────────────────────────
-def rewrite_aff_url(url: str, cfg: dict) -> str:
-    """APIが返す affiliateURL の af_id / ch / ch_id を config 設定で上書きする。
-    lurl（遷移先）はそのまま維持する。設定が無ければ元のURLを返す。"""
-    overrides = cfg.get("aff_link") or {}
-    if not url or not overrides:
-        return url
-    parts = urlsplit(url)
-    # keep_blank_values: lurl のエンコード済みクエリを壊さないため
-    query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    for key in ("af_id", "ch", "ch_id"):
-        if overrides.get(key) is not None:
-            query[key] = overrides[key]
-    new_query = urlencode(query)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+# 実体は common.py（meta.py / build_board.py と共用）。
+rewrite_aff_url = C.rewrite_aff_url
 
 
 # ──────────────────────────────────────────────
@@ -633,7 +574,7 @@ def main():
 
     if not chosen:
         print(f"  ✓ 新規作品はありません（既存 {len(have)}作品はすべて掲載済み）。")
-        print(f"  ダッシュボード更新: python3 {ROOT / 'scripts' / 'make_post_html.py'}")
+        print(f"  ボード更新: python3 {ROOT / 'scripts' / 'build_board.py'}")
         return
     titles = " / ".join(it.get("title", "?") for it in chosen)
     print(f"  取得 {len(items)}件 → 既存 {len(have)}作品はスキップ → "
@@ -665,7 +606,7 @@ def main():
     print(f"\n✓ 完成: {len(built)}作品を追加（各投稿に勝ち型を適用）→ {out_dir}")
     for folder, n in built:
         print(f"   - {folder.name}/  （画像{n}枚 + 投稿内容.md）")
-    print(f"\n  ダッシュボード更新: python3 {ROOT / 'scripts' / 'make_post_html.py'}")
+    print(f"\n  ボード更新: python3 {ROOT / 'scripts' / 'build_board.py'}")
 
 
 if __name__ == "__main__":
