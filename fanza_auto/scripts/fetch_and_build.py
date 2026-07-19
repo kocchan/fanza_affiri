@@ -38,7 +38,6 @@ from extract_safe_frames import extract_safe_frames
 
 ROOT = Path(__file__).resolve().parent.parent
 API_ENDPOINT = "https://api.dmm.com/affiliate/v3/ItemList"
-ACTRESS_ENDPOINT = "https://api.dmm.com/affiliate/v3/ActressSearch"
 MOVIE_HOST = "https://cc3001.dmm.co.jp/litevideo/freepv"
 MOVIE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -176,7 +175,7 @@ def build_ranking_main_text(name3: str, name2: str) -> str:
 
 
 # ──────────────────────────────────────────────
-# 有名女優（固定リスト）と顔写真（ActressSearch）
+# 有名女優（固定リスト）
 #   ランキングの2位/3位に出す“みんなが知ってる名前”の出どころ。
 #   1位は本命の素人作品なのでここには含めない。
 # ──────────────────────────────────────────────
@@ -189,28 +188,6 @@ def load_famous_names() -> list:
         return [n for n in (data.get("names") or []) if isinstance(n, str) and n.strip()]
     except Exception:
         return []
-
-
-def fetch_actress_image_url(cfg: dict, name: str) -> str:
-    """女優名から顔写真URL（大きい方優先）を返す。取れなければ空文字。"""
-    params = {
-        "api_id": cfg["api_id"],
-        "affiliate_id": cfg["affiliate_id"],
-        "keyword": name,
-        "hits": 1,
-        "output": "json",
-    }
-    try:
-        r = requests.get(ACTRESS_ENDPOINT, params=params, timeout=20)
-        r.raise_for_status()
-        acts = (r.json().get("result", {}) or {}).get("actress") or []
-        if not acts:
-            return ""
-        img = acts[0].get("imageURL") or {}
-        return img.get("large") or img.get("small") or ""
-    except Exception as e:
-        print(f"  ! 女優画像の取得失敗: {name} ({e})")
-        return ""
 
 
 # ──────────────────────────────────────────────
@@ -537,13 +514,124 @@ def existing_cids(works_dir: Path) -> set:
     return cids
 
 
-def main():
+# ──────────────────────────────────────────────
+# cid（またはFANZAのURL）を指定して1作品だけ取り込むモード
+#   例: python3 fetch_and_build.py 1sdjs00364
+#       python3 fetch_and_build.py "https://video.dmm.co.jp/av/content/?id=1sdjs00364..."
+#   フロアは cid だけでは分からないので、設定フロア→よく使う順で探す。
+# ──────────────────────────────────────────────
+_FLOOR_CANDIDATES = ["videoa", "videoc", "videob"]
+
+
+def extract_cid(token: str) -> str:
+    """FANZAのURLなら id= を取り出す。素の cid はそのまま返す。"""
+    token = token.strip()
+    if "id=" in token or "cid=" in token:
+        from urllib.parse import urlsplit, parse_qs
+        q = parse_qs(urlsplit(token).query)
+        for key in ("id", "cid"):
+            if q.get(key):
+                return q[key][0]
+    return token
+
+
+def fetch_item_by_cid(cid: str, cfg: dict) -> dict:
+    """cid 1件ぶんの作品データを取得（フロアを順に探す）。無ければ空dict。"""
+    floors = [cfg.get("floor")] + [f for f in _FLOOR_CANDIDATES
+                                   if f != cfg.get("floor")]
+    for floor in floors:
+        if not floor:
+            continue
+        params = {
+            "api_id": cfg["api_id"],
+            "affiliate_id": cfg["affiliate_id"],
+            "site": cfg["site"],
+            "service": cfg["service"],
+            "floor": floor,
+            "cid": cid,
+            "hits": 1,
+            "output": "json",
+        }
+        try:
+            r = requests.get(API_ENDPOINT, params=params, timeout=30)
+            r.raise_for_status()
+            result = r.json().get("result", {})
+        except Exception as e:
+            print(f"  ! {cid}: 取得失敗（floor={floor}） {e}")
+            continue
+        if str(result.get("status")) != "200":
+            continue
+        items = result.get("items") or []
+        if items:
+            print(f"  ✓ 取得: {cid}（floor={floor}）{items[0].get('title','')}")
+            return items[0]
+    return {}
+
+
+def build_specific(cids: list, cfg: dict, out_dir: Path) -> None:
+    """指定した cid（複数可）だけを works/ に取り込む。"""
+    have = existing_cids(out_dir)
+    items = []
+    for cid in cids:
+        if cid in have:
+            print(f"  ・{cid} は既に works/ にあります（スキップ）。")
+            continue
+        it = fetch_item_by_cid(cid, cfg)
+        if it:
+            items.append(it)
+        else:
+            print(f"  ✗ {cid} が API で見つかりませんでした。")
+
+    if not items:
+        print("  取り込む新規作品はありません。")
+        return
+
+    # ★源泉スクリーニング：指定作品でも未成年連想は必ず弾く（安全ガード）。
+    clean, skipped = screen_items(items, cfg)
+    for it, hits in skipped:
+        print(f"  🛡️ {it.get('content_id')} は未成年連想で除外: {','.join(hits)}")
+    if not clean:
+        print("  スクリーニングの結果、取り込める作品がありませんでした。")
+        return
+
+    detector = None
+    if cfg.get("download_movie", True) and cfg.get("extract_safe", True):
+        from nudenet import NudeDetector
+        detector = NudeDetector()
+
+    famous = load_famous_names()
+    rotation = T.PATTERN_ROTATION
+    built = []
+    for idx, item in enumerate(clean):
+        pattern = rotation[idx % len(rotation)]
+        if pattern == "ranking" and len(famous) < 2:
+            pattern = "record"
+        folder, n_images = build_post(item, idx + 1, cfg, out_dir, detector,
+                                      pattern=pattern, famous=famous)
+        built.append((folder, n_images))
+
+    print(f"\n✓ 完成: {len(built)}作品を追加 → {out_dir}")
+    for folder, n in built:
+        print(f"   - {folder.name}/  （画像{n}枚 + 投稿内容.md）")
+    print(f"\n  ボード更新: python3 {ROOT / 'scripts' / 'build_board.py'}")
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
     cfg = load_config()
     today = datetime.date.today().isoformat()
 
     # 新構成：作品ごとフォルダを works/ に永続化（日付フォルダは作らない）。
     out_dir = ROOT / "works"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # cid / URL が渡されたら、その作品だけを取り込む。
+    tokens = [a for a in argv if not a.startswith("-")]
+    if tokens:
+        cids = [extract_cid(t) for t in tokens]
+        print(f"▶ 指定作品を取り込み: {', '.join(cids)}")
+        build_specific(cids, cfg, out_dir)
+        return
 
     print(f"▶ FANZA {cfg['floor']} を {cfg['sort']} 順で {cfg['fetch_count']}件取得中…")
     items = fetch_items(cfg)

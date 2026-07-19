@@ -12,7 +12,7 @@
   "post_slots": ["夜", "朝"],
 
   "download_movie": true,
-  "movie_quality": "dm_w",
+  "movie_quality": "mhb_w",
   "movie_all": false,
   "extract_safe": true,
   "safe_frames_top_n": 10,
