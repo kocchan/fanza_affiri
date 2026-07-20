@@ -91,3 +91,31 @@
   最初にアカウントコンセプトを作り、アイコン・名前・ID の設定から始まる形に（`/launch-roadmap`）。
 - [x] **スキル一覧の README 化＋自動追記 hook**
   できるスキルを README に端的に記載。スキルが増減すると自動で追従（`.claude/sync_skills_readme.py` ＋ Stop フック）。
+
+
+
+https://video.dmm.co.jp/amateur/content/?id=erk116&i3_ref=recommend_i2i&i3_ord=8&i3_pst=1&dmmref=2c372329-9a8f4f0a4d9f58928c89ef3b0f00aaa0
+
+https://video.dmm.co.jp/amateur/content/?id=hoi412&i3_ref=recommend_i2i&i3_ord=12&i3_pst=1&dmmref=2c372329-9a8f4f0a4d9f58928c89ef3b0f00aaa0
+
+
+https://video.dmm.co.jp/amateur/content/?id=simp020&i3_ref=recommend_i2i&i3_ord=31&i3_pst=1&dmmref=2c372329-9a8f4f0a4d9f58928c89ef3b0f00aaa0
+
+https://video.dmm.co.jp/amateur/content/?id=oremo554&i3_ref=recommend_u2i&i3_ord=7&i3_pst=2&dmmref=14404cb3-9a8f4f0a4d9f58928c89ef3b0f00aaa0
+
+https://video.dmm.co.jp/amateur/content/?id=peep190&i3_ref=recommend&i3_ord=4&i3_pst=1&dmmref=pickup_amateur_top&via=amateur_top
+
+
+https://video.dmm.co.jp/amateur/content/?id=tkk008&i3_ref=ranking&i3_ord=10&i3_pst=2&dmmref=bestseller_ranking_amateur_top&via=amateur_top
+
+
+https://video.dmm.co.jp/amateur/content/?id=fcz019&i3_ref=ranking&i3_ord=11&i3_pst=2&dmmref=bestseller_ranking_amateur_top&via=amateur_top
+
+https://video.dmm.co.jp/amateur/content/?id=deas076&i3_ref=ranking&i3_ord=24&i3_pst=2&dmmref=bestseller_ranking_amateur_top&via=amateur_top
+
+https://video.dmm.co.jp/amateur/content/?id=deas075&i3_ref=ranking&i3_ord=37&i3_pst=2&dmmref=bestseller_ranking_amateur_top&via=amateur_top
+
+https://video.dmm.co.jp/amateur/content/?id=simw003&utm_medium=dmm_affiliate&utm_source=noeronolife-014&utm_term=dmm.co.jp&utm_campaign=affiliate_toolbar_sp&utm_content=link
+
+
+https://video.dmm.co.jp/amateur/content/?id=deas049&i3_ref=recommend_i2i&i3_ord=1&i3_pst=1&dmmref=2c372329-9a8f4f0a4d9f58928c89ef3b0f00aaa0

@@ -8,6 +8,7 @@
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -18,6 +19,36 @@ WORKS_DIR = ROOT / "works"
 
 ITEM_JSON = "item.json"        # 作品フォルダに置くメタ情報（DMM APIの生データ）
 POST_MD = "投稿内容.md"
+
+# ──────────────────────────────────────────────
+# 投稿予定日フォルダ（works/<YYYY-MM-DD>/<cid>_<作品名>/）
+#   ★ユーザー方針（2026-07-20）：作品は「進行中」という固定名ではなく、
+#   投稿する予定日ごとのフォルダで管理する。
+# ──────────────────────────────────────────────
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def is_date_dir(path: Path) -> bool:
+    """works/ 直下にある、名前が YYYY-MM-DD の日付フォルダかどうか。"""
+    return path.is_dir() and bool(DATE_RE.match(path.name))
+
+
+def date_dirs() -> list:
+    """works/ 直下の日付フォルダを日付順で返す。"""
+    if not WORKS_DIR.is_dir():
+        return []
+    return sorted((p for p in WORKS_DIR.iterdir() if is_date_dir(p)),
+                  key=lambda p: p.name)
+
+
+def date_of(work_dir: Path):
+    """作品フォルダが日付フォルダの中にあれば、その日付文字列を返す。無ければ None。"""
+    for parent in work_dir.parents:
+        if parent == WORKS_DIR:
+            break
+        if is_date_dir(parent):
+            return parent.name
+    return None
 
 DEFAULT_CONFIG = {
     "site": "FANZA",
@@ -78,7 +109,33 @@ def load_config(require_api: bool = True) -> dict:
                  ".env か config.json に設定してください。")
     cfg["api_id"] = api_id
     cfg["affiliate_id"] = aff_id
+    cfg["bitly_token"] = cfg.get("bitly_token") or env.get("BITLY_TOKEN")
     return cfg
+
+
+BITLY_API = "https://api-ssl.bitly.com/v4/shorten"
+
+
+def shorten_url(url: str, cfg: dict) -> str:
+    """アフィリンクを bit.ly で短縮する。トークン未設定・失敗時は元のURLをそのまま返す
+    （短縮は“できたら便利”な機能なので、失敗しても投稿文生成自体は止めない）。"""
+    token = (cfg or {}).get("bitly_token")
+    if not url or not token:
+        return url
+    try:
+        import requests
+        r = requests.post(
+            BITLY_API,
+            headers={"Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"},
+            json={"long_url": url}, timeout=10)
+        # bit.ly は新規作成成功で 201（既存URLの再取得で200）を返す。両方成功扱い。
+        if r.status_code in (200, 201):
+            return r.json().get("link") or url
+        print(f"  ! bit.ly短縮に失敗（status={r.status_code}）: {r.text[:200]}")
+    except Exception as e:
+        print(f"  ! bit.ly短縮に失敗: {e}")
+    return url
 
 
 def rewrite_aff_url(url: str, cfg: dict) -> str:
@@ -101,14 +158,15 @@ def rewrite_aff_url(url: str, cfg: dict) -> str:
 # works/ の走査
 # ──────────────────────────────────────────────
 def work_dirs(works_dir: Path = None) -> list:
-    """works/ 配下の作品フォルダを名前順で返す（投稿内容.md があるものだけ）。"""
+    """works/ 配下の作品フォルダを名前順で返す（投稿内容.md があるものだけ）。
+
+    サブフォルダ（例：works/進行中/<cid>_.../）に入れた作品も見つけられるよう、
+    直下だけでなく再帰的に探す（rglob）。"""
     works_dir = works_dir or WORKS_DIR
     if not works_dir.is_dir():
         return []
-    return sorted(
-        (d for d in works_dir.iterdir()
-         if d.is_dir() and (d / POST_MD).is_file()),
-        key=lambda d: d.name)
+    found = {p.parent for p in works_dir.rglob(POST_MD)}
+    return sorted(found, key=lambda d: d.name)
 
 
 def cid_of(work_dir: Path) -> str:

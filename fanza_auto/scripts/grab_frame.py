@@ -50,7 +50,7 @@ def main(argv):
         "-ss", f"{sec:.3f}",
         "-i", src,
         "-frames:v", "1",
-        "-q:v", "2",
+        "-q:v", "1",   # ffmpegの静止画品質は 1=最高〜31=最低。サムネ用に最高品質にする。
         dst,
     ]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

@@ -25,6 +25,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -36,6 +37,11 @@ import common as C
 ROOT = str(C.WORKS_DIR)
 CUT_PY = str(C.ROOT / "scripts" / "cut_video.py")
 CROP_PY = str(C.ROOT / "scripts" / "crop_video.py")
+GRAB_PY = str(C.ROOT / "scripts" / "grab_frame.py")
+CROP_IMG_PY = str(C.ROOT / "scripts" / "crop_image.py")
+
+# サムネ用に選べる「採用画像」の命名規則（01.jpg〜）。これ以外のjpgは選ばせない。
+IMAGE_RE = re.compile(r"^\d{2}\.jpg$")
 
 
 def lan_ip() -> str:
@@ -115,11 +121,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _safe_dir(self, name: str):
-        """works/ 直下の作品フォルダだけを許可（パス外・親参照を弾く）。"""
+        """works/ 配下の作品フォルダを許可（サブフォルダ内でもよい）。
+        正規化した実パスが ROOT の外に出ていないかで、親参照(..)によるパス外
+        アクセスだけを弾く（"/" 自体は 進行中/<cid>_... のネストのため許可）。"""
         name = (name or "").strip("/")
-        if not name or "/" in name or ".." in name:
+        if not name:
             return None
-        folder = os.path.join(ROOT, name)
+        root_real = os.path.realpath(ROOT)
+        folder = os.path.realpath(os.path.join(ROOT, name))
+        if not (folder == root_real or folder.startswith(root_real + os.sep)):
+            return None
         if not os.path.isdir(folder):
             return None
         return folder
@@ -150,37 +161,124 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except OSError:
             pass
 
-    # ── 動画の切り抜き（区間 /__cut）・画面トリミング（/__crop）・削除（/__del）──
+    # ── 動画の切り抜き（/__cut）・画面トリミング（/__crop）・削除（/__del）
+    #    ・静止画切り抜き（/__grab）・採用画像から選ぶ（/__select_thumb）
+    #    ・画像トリミング（/__crop_image）─────────────────────
     def do_POST(self):
         path = self.path.split("?")[0]
-        if path not in ("/__cut", "/__crop", "/__del"):
+        if path not in ("/__cut", "/__crop", "/__del",
+                        "/__grab", "/__select_thumb", "/__crop_image"):
             return self.send_error(404, "not found")
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b"{}"
         try:
             req = json.loads(body or b"{}")
 
-            # 作った素材（cut_/crop_）だけを削除する。元動画や他ファイルは消せない。
+            # 作った素材（cut_/crop_の動画、clip_/thumb_の画像）だけを削除する。
+            # 元動画・採用画像・他ファイルは消せない。
             if path == "/__del":
                 folder = self._safe_dir(req.get("dir"))
                 name = (req.get("file") or "").strip()
                 if not folder:
                     return self._json(400, {"ok": False, "error": "dir が不正"})
-                if (os.path.basename(name) != name
-                        or not name.startswith(("cut_", "crop_"))
-                        or not name.endswith(".mp4")):
+                ok_mp4 = name.startswith(("cut_", "crop_")) and name.endswith(".mp4")
+                ok_jpg = name.startswith(("clip_", "thumb_")) and name.endswith(".jpg")
+                if os.path.basename(name) != name or not (ok_mp4 or ok_jpg):
                     return self._json(400, {"ok": False,
-                                            "error": "削除できるのは cut_/crop_ の mp4 だけです"})
+                                            "error": "削除できるのは cut_/crop_(mp4) か "
+                                                     "clip_/thumb_(jpg) だけです"})
                 target = os.path.join(folder, name)
                 if not os.path.isfile(target):
                     return self._json(404, {"ok": False, "error": "ファイルが見つかりません"})
                 os.remove(target)
                 print(f"  🗑 削除: {req.get('dir')}/{name}")
+                self._rebuild_board(req.get("dir"))
                 return self._json(200, {"ok": True, "file": name})
 
+            # 候補画像（採用画像 or 動画から切り抜いた静止画）を、そのままサムネとして確定する。
+            if path == "/__select_thumb":
+                folder = self._safe_dir(req.get("dir"))
+                name = (req.get("file") or "").strip()
+                if not folder:
+                    return self._json(400, {"ok": False, "error": "dir が不正"})
+                if (os.path.basename(name) != name
+                        or not (IMAGE_RE.match(name) or name.startswith("clip_"))):
+                    return self._json(400, {"ok": False,
+                                            "error": "選べるのは候補画像（採用画像 or 切り抜き画像）だけです"})
+                src_img = os.path.join(folder, name)
+                if not os.path.isfile(src_img):
+                    return self._json(404, {"ok": False, "error": "画像が見つかりません"})
+                base = os.path.splitext(name)[0]
+                out_name = f"thumb_pick_{base}.jpg"
+                dst = os.path.join(folder, out_name)
+                n = 2
+                while os.path.isfile(dst):   # 同じ画像を複数回選んだら連番にする
+                    out_name = f"thumb_pick_{base}_{n}.jpg"
+                    dst = os.path.join(folder, out_name)
+                    n += 1
+                shutil.copyfile(src_img, dst)
+                print(f"  🖼 サムネ選択: {req.get('dir')}/{out_name}（元 {name}）")
+                self._rebuild_board(req.get("dir"))
+                return self._json(200, {"ok": True, "file": out_name})
+
+            # 既存画像（採用画像・作成済みサムネ）を範囲選択でトリミングする。
+            if path == "/__crop_image":
+                folder = self._safe_dir(req.get("dir"))
+                name = (req.get("image") or "").strip()
+                rect = (req.get("rect") or "").strip()
+                if not folder:
+                    return self._json(400, {"ok": False, "error": "dir が不正"})
+                if (os.path.basename(name) != name or not name.endswith(".jpg")
+                        or not (IMAGE_RE.match(name)
+                                or name.startswith(("clip_", "thumb_")))):
+                    return self._json(400, {"ok": False, "error": "元画像が不正"})
+                src_img = os.path.join(folder, name)
+                if not os.path.isfile(src_img):
+                    return self._json(404, {"ok": False, "error": "元画像が見つかりません"})
+                parts = rect.split(",")
+                if len(parts) != 4 or not all(
+                        p.strip().lstrip("-").replace(".", "", 1).isdigit()
+                        for p in parts):
+                    return self._json(400, {"ok": False, "error": "rect は x,y,w,h の数値"})
+                x, y, w, h = (int(float(p)) for p in parts)
+                out_name = f"thumb_sel_{x}_{y}_{w}x{h}.jpg"
+                dst = os.path.join(folder, out_name)
+                cmd = [sys.executable, CROP_IMG_PY, src_img, rect, "-", dst]
+                r = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True, timeout=30)
+                if r.returncode != 0 or not os.path.isfile(dst):
+                    self._cleanup(dst)
+                    return self._json(500, {"ok": False,
+                                            "error": (r.stdout or "")[-400:]})
+                print(f"  🖼 画像トリミング: {req.get('dir')}/{out_name}")
+                self._rebuild_board(req.get("dir"))
+                return self._json(200, {"ok": True, "file": out_name})
+
+            # 以下は動画（sample.mp4）を対象にする処理
             src, err = self._resolve_src(req)
             if err:
                 return self._json(400, err)
+
+            if path == "/__grab":
+                sec = str(req.get("sec", "")).strip()
+                if sec == "":
+                    return self._json(400, {"ok": False, "error": "sec が必要"})
+                try:
+                    float(sec)
+                except ValueError:
+                    return self._json(400, {"ok": False, "error": "sec は数値"})
+                out_name = f"clip_{self._tag(sec)}s.jpg"
+                dst = os.path.join(os.path.dirname(src), out_name)
+                cmd = [sys.executable, GRAB_PY, src, sec, dst]
+                r = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True, timeout=30)
+                if r.returncode != 0 or not os.path.isfile(dst):
+                    self._cleanup(dst)
+                    return self._json(500, {"ok": False,
+                                            "error": (r.stdout or "")[-400:]})
+                print(f"  📸 静止画切り抜き: {req.get('dir')}/{out_name}")
+                self._rebuild_board(req.get("dir"))
+                return self._json(200, {"ok": True, "file": out_name})
 
             if path == "/__cut":
                 start = str(req.get("start", "")).strip()
@@ -235,9 +333,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._json(500, {"ok": False,
                                         "error": (r.stdout or "")[-400:]})
             print(f"  {label}: {req.get('dir')}/{out_name}")
+            self._rebuild_board(req.get("dir"))
             return self._json(200, {"ok": True, "file": out_name})
         except Exception as ex:
             return self._json(500, {"ok": False, "error": str(ex)})
+
+    def _rebuild_board(self, dir_rel):
+        """切り抜き/削除の直後に board_<cid>.html を作り直す。
+        作り直さないと「消した/作った動画がリロードで元に戻る」ことになる
+        （HTMLは静的ファイルで、生成時点のファイル一覧を固定で持つため）。
+
+        ★この作品が日付フォルダ（works/<YYYY-MM-DD>/）に入っている場合は、
+          serve_board.py 単体で使っていても（serve_schedule.py 経由でなくても）
+          その日のスケジュールダッシュボードを同期する。そうしないと
+          「個別ページでは反映されているのにダッシュボードには出ない」というズレが起きる。"""
+        work_dir = C.WORKS_DIR / (dir_rel or "")
+        cfg = C.load_config(require_api=False)
+        try:
+            cid = C.cid_of(work_dir)
+            BB.build_single(cid, cfg, regen=False)
+        except Exception as ex:
+            print(f"  ! board_{dir_rel} の再生成に失敗: {ex}")
+        date = C.date_of(work_dir)
+        if date:
+            try:
+                import schedule_board as SB
+                SB.build_for_date(date, cfg)
+            except Exception as ex:
+                print(f"  ! {date} のダッシュボード再生成に失敗: {ex}")
 
 
 def main(argv) -> int:

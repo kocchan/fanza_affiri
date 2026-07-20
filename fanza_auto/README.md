@@ -1,26 +1,53 @@
 # FANZA 投稿セット自動生成ツール
 
 FANZAの人気動画を取得し、「アカウントを開いて貼るだけ」の投稿セットを生成する。
-作品ごとにフォルダを作り、**全作品を1枚の投稿ボード（`works/board.html`）に集約**する。
+作品ごとにフォルダを作り、**投稿予定日ごとのフォルダ（`works/<YYYY-MM-DD>/`）に集めて
+1枚のスケジュール管理ダッシュボードで扱う**。
 
 ## 仕組み
 
 ```
-DMMアフィリエイトAPI（人気動画ランキング）
+DMMアフィリエイトAPI（人気動画ランキング／またはcid・URL指定）
    │
    ├─ すでに works/ にある作品(cid)はスキップ＝未掲載の新作だけを仕上げる（差分追加）
    ├─ 動画からの規制セーフフレームを優先して画像を採用（公式サンプルは補充）
    ├─ サンプル動画(mp4)もフォルダに同梱
+   ├─ 取り込み時に「投稿予定日」を聞く（未入力なら今日）
    │
-   └─ 1作品＝1フォルダで出力（日付フォルダは作らない）
-         works/<cid>_<作品名>/
+   └─ 1作品＝1フォルダで works/<投稿予定日>/ に出力
+         works/<YYYY-MM-DD>/<cid>_<作品名>/
             ├─ 01.jpg 〜          … 投稿に使う採用画像
             ├─ sample.mp4         … サンプル動画（動画優先で投稿）
             ├─ item.json          … 作品情報（評価・収録時間・ジャンル等）
             └─ 投稿内容.md        … 勝ち型を適用した本文一式
-         works/board.html         … 投稿ボード（テキスト専用・こちらがメイン）
-         works/index.html         … 旧ダッシュボード（画像まわり担当）
+         works/<YYYY-MM-DD>/dashboard.html  … その日の投稿スケジュール管理（一覧・メイン）
+         works/board_<cid>.html             … 1作品ぶんの個別ボード（投稿文コピー・動画編集）
 ```
+
+## 投稿スケジュール管理（`works/<日付>/dashboard.html`）
+
+作品は投稿予定日ごとのフォルダ（`works/2026-07-25/` のように）にまとまる。
+日付は取り込み時（`fetch_and_build.py`）に対話で聞かれる。
+
+```bash
+python3 fanza_auto/scripts/serve_schedule.py               # 日付フォルダが1つならそれを開く
+python3 fanza_auto/scripts/serve_schedule.py 2026-07-25     # 日付を指定して開く
+```
+
+- `works/<日付>/dashboard.html` に、その日付フォルダの作品だけをカード表示（横一列＋スクロール）。
+- 各カードに載るのは**カットした動画（cut_/crop_）だけ**。元のサンプル動画は載せない
+  （長尺のまま見たい・切り抜きたいときは個別ページへ）。
+- 各カードでできること：
+  - カットした動画一覧・作成したサムネ画像一覧＋⬇保存・🗑削除
+  - **①サブ投稿・②メイン投稿・アフィリンク**のコピー
+  - 「投稿済みにする」トグル（ブラウザの localStorage に保存・サーバー不要）
+  - 「📄 個別ページを開く」で、その作品の単体ボード（動画の再生/切り抜き/画面トリミング）へ移動
+- 動画の切り抜き/削除は `serve_schedule.py` 経由でのみ動く
+  （`dashboard.html` を直接ダブルクリックした場合は閲覧・保存のみ）。
+- 個別ページで動画を切り抜く/削除すると、ダッシュボードと個別ページ双方のHTMLが自動で作り直される
+  （リロードしても最新状態になる）。
+- 投稿日を変更したいときは、作品フォルダを別の日付フォルダへ `mv` するだけでよい
+  （`work_dirs()` は再帰的に探すので、どの日付フォルダに入れても動く）。
 
 ## 投稿文はどう作られるか
 
@@ -48,16 +75,25 @@ DMMアフィリエイトAPI（人気動画ランキング）
 
 ```bash
 # プロジェクトのルートフォルダで実行
-python3 fanza_auto/scripts/fetch_and_build.py      # 未掲載の新作だけ works/ に追加
-python3 fanza_auto/scripts/build_board.py --open   # 投稿ボード（works/board.html）を作って開く
+python3 fanza_auto/scripts/fetch_and_build.py      # 未掲載の新作だけ追加（投稿予定日を聞かれる）
+python3 fanza_auto/scripts/serve_schedule.py       # スケジュールダッシュボードを開く
 ```
 
-**投稿ボード（`works/board.html`）** … テキスト専用の一覧。作品情報・投稿文・アフィリリンクを
-ワンクリックでコピーして X に貼る。サーバー不要でダブルクリックでも開ける。
+特定のURL/cidだけ取り込みたいときは引数で渡す（投稿予定日も `--date=` で指定できる）：
+
+```bash
+python3 fanza_auto/scripts/fetch_and_build.py debz015
+python3 fanza_auto/scripts/fetch_and_build.py debz015 --date=2026-07-25
+python3 fanza_auto/scripts/fetch_and_build.py "https://video.dmm.co.jp/av/content/?id=debz015..."
+```
+
+> ⚠️ **`build_board.py`／`schedule_board.py` のHTML/CSS/JS（テンプレート）を変更したときは**、
+> `python3 fanza_auto/scripts/build_board.py --all` で全作品ぶんを一括再生成すること。
+> cidを1つずつ指定すると、一部の作品だけ古いテンプレートのまま取り残す事故が起きる。
 
 ### 1作品だけを動画つきで開く
 
-一覧から作品の cid を決めたら、その1作品だけを**動画つき**で開く：
+ダッシュボードの「📄 個別ページを開く」から移動するか、cid を指定して直接開く：
 
 ```bash
 python3 fanza_auto/scripts/serve_board.py debz015   # cid を指定（例: debz015）
@@ -75,7 +111,18 @@ python3 fanza_auto/scripts/serve_board.py debz015   # cid を指定（例: debz0
   - **⬇ 保存**：動画（や切り抜き・トリミング）をダウンロード → Finder から X にドラッグ。
   - 画質：切り出しは crf 18（ほぼ視覚劣化なし）で再エンコード。ただし**画面を小さく切るほど解像度が下がる**ので
     （元は 1024×576）、粗く見せたくないときは範囲を大きめに取る。
-- 投稿文・アフィリリンクのコピーも一覧と同じように使える。
+- **🖼 サムネ画像を作る**（動画ツールとは別の独立したボックス）：投稿の顔になる1枚を作る。
+  1. **動画から切り抜く（任意）** … ボックス内の専用プレーヤーで再生・一時停止し、
+     「📸 今の場面を候補に追加」→ 採用画像の隣に候補として並ぶ。
+  2. **候補（横スクロール）** … 採用画像（01.jpg〜）＋切り抜いた静止画が横一列に並ぶ。クリックで選ぶ。
+  3. **大きいプレビュー** … クリックした画像が大きく表示され、その場で**ドラッグして範囲選択**できる。
+  4. **「✅ この画像でOK」** … 選択があればその範囲を切り出し、無ければ画像全体をそのまま採用。
+     どちらも再圧縮なし〜高品質再エンコード（JPEG品質98・4:4:4）で**画質を落とさない**。
+     大きいプレビューはボックスの横幅いっぱいに表示。
+  - ⚠️ 採用画像（01.jpg〜）は取得当時の動画画質のままなので、作品によっては解像度が低いことがある。
+    ぼやけて見えるときは「動画から切り抜く」を使うと、今の動画画質（1024×576）でくっきり撮れる。
+  - 確定したサムネは下の一覧に並び、⬇保存・🗑削除ができる。
+- 投稿文・アフィリリンクのコピーもここでできる（①サブ投稿・②メイン投稿）。
 - 止めるときは実行中のターミナルで `Ctrl+C`。
 - 切り抜きには **ffmpeg** が必要（`brew install ffmpeg`）。
 - 再生と保存だけなら `build_board.py <cid>` で作った `board_<cid>.html` を直接開いてもよい
@@ -87,7 +134,7 @@ python3 fanza_auto/scripts/serve_board.py debz015   # cid を指定（例: debz0
 python3 fanza_auto/_archive/board_v1/serve.py      # 旧ボード（画像まわり担当）
 ```
 
-実行すると `works/` の下に**未掲載の新作だけ**フォルダが増える（既存はスキップ）。
+実行すると `works/<投稿予定日>/` の下に**未掲載の新作だけ**フォルダが増える（既存はスキップ）。
 各フォルダの `投稿内容.md` に沿って、**サブ→メインの引用フロー**で投稿する：
 
 1. **サブ** … 「① サブ投稿」を先に投稿。画像/動画を添付し、アフィリンク付きで出す
@@ -98,6 +145,11 @@ python3 fanza_auto/_archive/board_v1/serve.py      # 旧ボード（画像まわ
 ## 設定
 
 - 認証情報：プロジェクト直下の `.env`（`DMM_API_ID` / `DMM_AFFILIATE_ID`）から自動で読む。
+  - `BITLY_TOKEN` … 設定するとアフィリンクを bit.ly で自動短縮する（任意）。
+    [bitly.com](https://bitly.com/) で無料アカウント作成 → Settings → API →
+    Generate Access Token で取得。未設定なら短縮せず元のURLのまま動く。
+    短縮結果は各作品の `item.json`（`short_url`）にキャッシュされ、リンクの中身
+    （af_id等）が変わらない限り再利用される。
 - 細かい挙動：`config.json` で上書き可能。`config.example.json` をコピーして作る。
   - `fetch_count` … APIからの取得件数（既定50。この中の未使用上位を投稿化）
   - `posts_per_day` … 仕上げる投稿フォルダ数（既定2）
@@ -139,26 +191,33 @@ python3 fanza_auto/_archive/board_v1/serve.py      # 旧ボード（画像まわ
 
 ## 生成物
 
-- `works/<cid>_<作品名>/` … 1作品ぶんのフォルダ（cidで一意・差分追加）
+- `works/<YYYY-MM-DD>/<cid>_<作品名>/` … 1作品ぶんのフォルダ（cidで一意・差分追加）
   - `01.jpg`〜 … 投稿用の採用画像（規制セーフフレーム優先＋公式サンプル補充）
   - `sample.mp4` … サンプル動画（動画優先で投稿）
   - `item.json` … 作品情報（タイトル・評価・収録時間・発売日・ジャンル・メーカー）
   - `投稿内容.md` … 勝ち型を適用した本文一式（サブ→メイン引用→賑やかし 等）
-  - （旧ボードでの操作物）`cut_*.mp4`(動画切り抜き) / `clip_*s.jpg`(画像切り抜き) / `alt_*.jpg`(再選出)
-- `works/board.html` … **投稿ボード**（作品情報＋投稿文＋アフィリリンクをコピー／サーバー不要）
-- `works/posts.json` … ボードに出す投稿文の保存先。一度作ったら固定される
-  （文を作り直すのは `build_board.py --regen` のときだけ）
-- `works/index.html` … 旧ダッシュボード（画像の切り抜き・A/B判定はこちら）
-- `works/status.json` / `works/verdicts.json` … ステータスと画像A/B判定の保存DB（全体で各1つ）
+  - `cut_*.mp4`(時間で切り抜き) / `crop_*.mp4`(画面トリミング)
+- `works/<YYYY-MM-DD>/dashboard.html` … **その日の投稿スケジュール管理ダッシュボード**
+- `works/board_<cid>.html` … 1作品ぶんの個別ボード（投稿文・アフィリリンクのコピー／動画編集）
+- `works/posts.json` … 投稿文の保存先。一度作ったら固定される
+  （文を作り直すのは `build_board.py <cid> --regen` のときだけ）
 - `works/00_審査チェックリスト.md` … 最新実行ぶんの源泉除外＋目視チェック項目
+
+旧ダッシュボード（画像の切り抜き・A/B判定）は `fanza_auto/_archive/board_v1/` に残っている。
+使うときは `python3 fanza_auto/_archive/board_v1/serve.py`。
 
 ## スクリプト早見
 
 | スクリプト | 役割 |
 |---|---|
-| `fetch_and_build.py` | 新作を取得して `works/` に追加（画像・動画・`item.json`） |
+| `fetch_and_build.py` | 新作を取得して `works/<投稿予定日>/` に追加（画像・動画・`item.json`）。cid/URL指定も可 |
 | `meta.py` | 作品情報を取り直して `item.json` を作る（`--all` で全件更新） |
 | `post_text.py` | 作品情報から投稿文を1本作る（本文の安全フィルタもここ） |
-| `build_board.py` | `works/board.html`（一覧）を作る。cid を渡すと1作品だけの動画つきボード |
+| `build_board.py` | cid を渡して1作品だけの動画つきボード `board_<cid>.html` を作る。`--all` で全作品＋全日付ダッシュボードを一括再生成 |
 | `serve_board.py` | 1作品ボードを動画の切り抜きも使える状態で開く（`<cid>` を渡す） |
+| `crop_video.py` | 動画の画面トリミング（比率プリセット／手動範囲どちらも対応） |
+| `grab_frame.py` | 動画の指定時刻を静止画（jpg）として切り抜く（サムネ作成A） |
+| `crop_image.py` | 静止画のトリミング（比率プリセット／手動範囲どちらも対応、サムネ作成C） |
+| `schedule_board.py` | `works/<日付>/dashboard.html`（その日の投稿スケジュール管理）を作る |
+| `serve_schedule.py` | スケジュールダッシュボードを、予定保存・切り抜きも使える状態で開く |
 | `common.py` | 設定読み込み・アフィリリンク整形・`works/` 走査の共通土台 |

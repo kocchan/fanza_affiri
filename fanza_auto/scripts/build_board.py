@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-投稿ボード `works/board.html`（全作品一覧）を作る。
+1作品ぶんの投稿ボード `works/board_<cid>.html` を作る（動画プレーヤー・切り抜き・保存つき）。
 
 やること:
-  works/ の各作品について「作品情報」「投稿文（1本）」「アフィリリンク」を
+  指定した cid の作品について「作品情報」「投稿文（1本）」「アフィリリンク」を
   1枚のHTMLにまとめ、それぞれワンクリックでコピーできるようにする。
-
-■ 単一作品モード（cid を渡す）
-  cid を指定すると、その1作品だけの `works/board_<cid>.html` を作る。
-  こちらには動画プレーヤー・切り抜き・保存が付く。
   ただし切り抜き（ffmpeg処理）はサーバー経由でのみ動くので、
   `serve_board.py <cid>` から使うのが基本（file:// 直開きは再生と保存だけ）。
+
+複数作品をまとめて見たい・投稿の日時とアカウントを管理したいときは
+`schedule_board.py`（`works/進行中/dashboard.html`）を使う。こちらが全作品一覧の代わり。
 
 投稿文は一度作ったら `works/posts.json` に保存して固定する。
 毎回作り直すと「昨日いいと思った文が今日は変わっている」ことになるため。
 文を作り直したいときだけ --regen を付ける。
 
 使い方（プロジェクトのルートフォルダで実行）:
-    python3 fanza_auto/scripts/build_board.py            # 全作品の一覧ボード
     python3 fanza_auto/scripts/build_board.py debz015    # その1作品だけ（動画つき）
-    python3 fanza_auto/scripts/build_board.py --regen    # 投稿文を作り直す
-    python3 fanza_auto/scripts/build_board.py --open     # 作ってそのまま開く
+    python3 fanza_auto/scripts/build_board.py debz015 --regen   # 投稿文を作り直す
+    python3 fanza_auto/scripts/build_board.py debz015 --open    # 作ってそのまま開く
 """
 
 import datetime
@@ -36,7 +34,6 @@ import common as C
 import post_text as PT
 
 POSTS_JSON = C.WORKS_DIR / "posts.json"
-BOARD_HTML = C.WORKS_DIR / "board.html"
 
 
 def single_board_path(cid: str):
@@ -91,6 +88,17 @@ def collect(cfg: dict) -> list:
         aff_url = item.get("affiliateURL") or ""
         if aff_url:
             aff_url = C.rewrite_aff_url(aff_url, cfg)
+            # ★bit.lyで短縮する。APIを毎回叩かないよう item.json にキャッシュし、
+            #   元URL（short_url_src）が変わったとき（af_id変更等）だけ作り直す。
+            if item.get("short_url") and item.get("short_url_src") == aff_url:
+                aff_url = item["short_url"]
+            else:
+                short = C.shorten_url(aff_url, cfg)
+                if short != aff_url:
+                    item["short_url"] = short
+                    item["short_url_src"] = aff_url
+                    C.write_item(d, item)
+                aff_url = short
         avg, count = PT.review_of(item)
         entries.append({
             "dir": d,
@@ -115,6 +123,12 @@ def collect(cfg: dict) -> list:
             # 手動で作った素材（区間切り cut_* ＋ 画面トリミング crop_*）
             "clips": sorted(p.name for p in d.glob("*.mp4")
                             if p.name.startswith(("cut_", "crop_"))),
+            # サムネの元ネタ候補：採用画像（システム抽出）＋動画から切り抜いた静止画。
+            # どちらも「まだ確定していない候補」として同じ横並び一覧に出す。
+            "images": sorted(p.name for p in d.glob("[0-9][0-9].jpg")),
+            "grabs": sorted(p.name for p in d.glob("clip_*.jpg")),
+            # 確定したサムネ（候補をOK/トリミングして作った成果物）
+            "thumbs": sorted(p.name for p in d.glob("thumb_*.jpg")),
         })
     return entries
 
@@ -184,7 +198,9 @@ button.copied{background:var(--okbg);color:var(--ok);border-color:transparent}
 a{color:var(--accent)}
 .empty{text-align:center;color:var(--sub);padding:40px 0}
 /* 動画（単一作品モード） */
-.video{margin:0 0 16px}
+/* 動画ボックス・サムネ画像ボックスを見た目でもはっきり分ける */
+.video{margin:0 0 16px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+.video h3,.thumbtool h3{font-size:1rem;margin:0 0 10px}
 .vwrap{position:relative;line-height:0;border-radius:10px;overflow:hidden}
 .video video{width:100%;max-height:70vh;background:#000;display:block}
 /* 範囲選択オーバーレイ（普段は非表示。選択モードON時だけ有効） */
@@ -214,15 +230,47 @@ a{color:var(--accent)}
 .clips{display:flex;flex-direction:column;gap:12px}
 .clip{border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--bg)}
 .clip video{width:100%;border-radius:6px;background:#000;display:block;margin-bottom:8px}
-.clip-h{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;
+.clip-h{display:flex;justify-content:space-between;align-items:center;gap:8px;
  font-size:.82rem;font-weight:700;margin-bottom:6px}
+.clip-h>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .dl{display:inline-block;border:1px solid var(--line);border-radius:7px;padding:5px 12px;
- font-size:.8rem;text-decoration:none;color:var(--fg)}
+ font-size:.8rem;text-decoration:none;color:var(--fg);white-space:nowrap;flex-shrink:0}
 .dl:hover{border-color:var(--accent);color:var(--accent)}
-.clip-act{display:flex;gap:6px;align-items:center}
-button.del{font-size:.78rem;padding:5px 10px;color:var(--sub)}
+.clip-act{display:flex;gap:6px;align-items:center;flex-shrink:0}
+button.del{font-size:.78rem;padding:5px 10px;color:var(--sub);white-space:nowrap;flex-shrink:0}
 button.del:hover{border-color:#dc2626;color:#dc2626}
 .err{color:var(--accent);font-size:.8rem;margin:6px 0 0}
+
+/* サムネ画像作成セクション */
+/* サムネ画像ボックス（動画ボックスと同じ見た目で、はっきり別のボックスにする） */
+.thumbtool{margin:18px 0 0;padding:14px;border:1px solid var(--line);border-radius:12px;
+ background:var(--bg)}
+.trow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+.trow b{font-size:.82rem;color:var(--fg);width:100%}
+.hintsm{font-size:.76rem;color:var(--sub)}
+/* 画像ボックス専用の埋め込み動画プレーヤー（上の動画ボックスとは別・共有しない） */
+.gvwrap{max-width:100%;margin:4px 0}
+.gvwrap video{width:100%;max-height:50vh;background:#000;display:block}
+/* 候補画像：ボックス内で横スクロール（折り返さない） */
+.candrow{display:flex;gap:10px;margin:6px 0 4px;overflow-x:auto;padding-bottom:8px;
+ scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
+.candrow::-webkit-scrollbar{height:8px}
+.candrow::-webkit-scrollbar-thumb{background:var(--line);border-radius:999px}
+.cand{flex:0 0 auto;width:150px;border:2px solid var(--line);border-radius:8px;
+ overflow:hidden;cursor:pointer;scroll-snap-align:start;background:var(--card)}
+.cand:hover{border-color:var(--accent)}
+.cand.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
+.cand img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover}
+/* 大きいプレビュー＋ドラッグ選択（ここで直接トリミングできる）
+   ★横幅はボックスいっぱいに広げる（width:100%）。.vwrap と img を同じ幅にしておかないと
+   ドラッグ選択の座標計算（getBoundingClientRect基準）がズレるので、両方に同じ width:100% を指定する。 */
+.bigwrap{margin:10px 0}
+.bigwrap .vwrap{width:100%}
+.bigwrap img{display:block;width:100%;height:auto;background:#000}
+button.go.primary{font-weight:700}
+.thumbgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.clip.thumb{padding:10px}
+.clip.thumb img{width:100%;height:auto;display:block;border-radius:8px;margin-bottom:8px}
 """
 
 JS = """
@@ -336,7 +384,7 @@ function bindSelect(layer){
     applyBtn.disabled=false;
   });
 }
-document.querySelectorAll('.sellayer').forEach(bindSelect);
+document.querySelectorAll('.sellayer:not(.imgsel)').forEach(bindSelect);
 
 // 実行ボタン：時間切り(cut) / 比率crop / 手動範囲croprect をサーバーに投げる。
 document.addEventListener('click',async e=>{
@@ -401,12 +449,13 @@ function addClip(uid,dir,file,label){
   wrap.prepend(el);
 }
 
-// 作った素材の削除（元動画は消せない＝サーバー側で cut_/crop_ のみ許可）
+// 作った素材の削除（元動画/元画像は消せない＝サーバー側で cut_/crop_/clip_/thumb_ のみ許可）
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button.del');if(!b)return;
   const file=b.dataset.file, dir=b.dataset.dir;
   const clip=b.closest('.clip');
-  const err=b.closest('.video').querySelector('.err');
+  const scope=b.closest('.video')||b.closest('.thumbtool');
+  const err=scope.querySelector('.err');
   err.textContent='';
   if(location.protocol==='file:'){
     err.textContent='削除は serve_board.py 経由でのみ動きます（今は file:// で開いています）。';return;}
@@ -420,6 +469,141 @@ document.addEventListener('click',async e=>{
     else{clip.remove();}
   }catch(ex){err.textContent='通信に失敗しました: '+ex;b.textContent=old;b.disabled=false;}
 });
+
+// ── サムネ画像作成：動画切り抜き→候補一覧→大きいプレビューでドラッグ選択→OKで確定 ──
+function mediaUrl(dir,file){
+  return dir.split('/').map(encodeURIComponent).join('/')+'/'+encodeURIComponent(file);
+}
+
+// 確定したサムネ（thumb_*.jpg）を一覧に追加する
+function addThumb(uid,dir,file){
+  const wrap=document.getElementById('thumbs-'+uid)
+    || (()=>{const box=document.createElement('div');box.className='clips thumbgrid';
+      box.id='thumbs-'+uid;
+      const tt=document.getElementById('cand-'+uid).closest('.thumbtool');
+      const empty=document.getElementById('thumbs-'+uid+'-empty');if(empty)empty.remove();
+      tt.appendChild(box);return box;})();
+  const src=mediaUrl(dir,file);
+  const el=document.createElement('div');el.className='clip thumb';el.dataset.file=file;
+  el.innerHTML=`<img src="${src}">
+    <div class="clip-h"><span>🖼 ${file}</span>
+    <span class="clip-act"><a class="dl" href="${src}" download="${file}">⬇ 保存</a>
+    <button class="del" data-file="${file}" data-dir="${dir}">🗑 削除</button></span></div>`;
+  wrap.prepend(el);
+}
+
+// 候補（採用画像／切り抜いた静止画）を一覧に追加する
+function addCandidate(uid,dir,file){
+  const row=document.getElementById('cand-'+uid);
+  const notice=row.querySelector('.notice');if(notice)notice.remove();
+  const src=mediaUrl(dir,file);
+  const el=document.createElement('div');el.className='cand';el.dataset.file=file;
+  el.innerHTML=`<img src="${src}" draggable="false">`;
+  row.appendChild(el);
+  el.click();   // 切り抜いたその場で大きいプレビューにも出す
+}
+
+// 動画の今の再生位置を静止画として切り抜き、候補に追加する（確定はまだしない）
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('button.grabbtn');if(!b)return;
+  const uid=b.dataset.uid,dir=b.dataset.dir,movie=b.dataset.movie;
+  const vid=document.getElementById(b.dataset.vid);
+  const err=b.closest('.thumbtool').querySelector('.err');
+  err.textContent='';
+  if(location.protocol==='file:'){err.textContent='この機能は serve_board.py 経由でのみ動きます。';return;}
+  const sec=(Math.round((vid.currentTime||0)*10)/10);
+  const old=b.textContent;b.textContent='切り抜き中…';b.disabled=true;
+  try{
+    const r=await fetch('/__grab',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({dir,video:movie,sec})});
+    const j=await r.json();
+    if(!j.ok){err.textContent='失敗: '+(j.error||'不明なエラー');}
+    else{addCandidate(uid,dir,j.file);}
+  }catch(ex){err.textContent='通信に失敗しました: '+ex;}
+  b.textContent=old;b.disabled=false;
+});
+
+// 候補クリック → 大きいプレビューに表示し、ドラッグ選択を有効化する
+const BIGSEL={};
+document.addEventListener('click',e=>{
+  const cand=e.target.closest('.cand');if(!cand)return;
+  const row=cand.closest('.candrow');
+  const uid=row.id.slice(5);   // "cand-" の5文字を除く
+  const dir=row.dataset.dir;
+  row.querySelectorAll('.cand').forEach(c=>c.classList.remove('active'));
+  cand.classList.add('active');
+  const file=cand.dataset.file;
+  const wrap=document.getElementById('bigwrap-'+uid);
+  const img=document.getElementById('bigimg-'+uid);
+  const layer=document.getElementById('bigsel-'+uid);
+  img.src=mediaUrl(dir,file);
+  wrap.dataset.file=file;
+  wrap.style.display='';
+  layer.classList.add('on');   // ★これが無いと透明な操作面が display:none のままでドラッグが効かない
+  document.getElementById('bigsi-'+uid).textContent='ドラッグで範囲を選べます（選ばなければ全体を使用）';
+  delete BIGSEL[uid];
+  wrap.scrollIntoView({behavior:'smooth',block:'nearest'});
+});
+function bindBigSelect(layer){
+  const uid=layer.id.slice(7);   // "bigsel-" の7文字を除く
+  let box=null, sx=0, sy=0, drawing=false;
+  const info=document.getElementById('bigsi-'+uid);
+  const pt=ev=>{const r=layer.getBoundingClientRect();
+    return {x:Math.max(0,Math.min(ev.clientX-r.left,r.width)),
+            y:Math.max(0,Math.min(ev.clientY-r.top,r.height)),r};};
+  layer.addEventListener('pointerdown',ev=>{
+    ev.preventDefault();drawing=true;const p=pt(ev);sx=p.x;sy=p.y;
+    if(box)box.remove();
+    box=document.createElement('div');box.className='selbox';layer.appendChild(box);
+    layer.setPointerCapture(ev.pointerId);
+  });
+  layer.addEventListener('pointermove',ev=>{
+    if(!drawing||!box)return;const p=pt(ev);
+    const x=Math.min(sx,p.x),y=Math.min(sy,p.y),w=Math.abs(p.x-sx),h=Math.abs(p.y-sy);
+    box.style.left=x+'px';box.style.top=y+'px';box.style.width=w+'px';box.style.height=h+'px';
+  });
+  layer.addEventListener('pointerup',ev=>{
+    if(!drawing)return;drawing=false;
+    const img=document.getElementById('bigimg-'+uid);
+    const r=layer.getBoundingClientRect();
+    const scaleX=(img.naturalWidth||r.width)/r.width, scaleY=(img.naturalHeight||r.height)/r.height;
+    const bx=box.offsetLeft*scaleX, by=box.offsetTop*scaleY,
+          bw=box.offsetWidth*scaleX, bh=box.offsetHeight*scaleY;
+    if(bw<8||bh<8){info.textContent='もう少し大きく囲ってください（選択なしでOKなら画像全体を使います）';
+      delete BIGSEL[uid];box.remove();box=null;return;}
+    BIGSEL[uid]={x:Math.round(bx),y:Math.round(by),w:Math.round(bw),h:Math.round(bh)};
+    info.textContent=`選択：${BIGSEL[uid].w}×${BIGSEL[uid].h}px（このままOKを押すとこの範囲を切り出します）`;
+  });
+}
+document.querySelectorAll('.sellayer.imgsel').forEach(bindBigSelect);
+
+// 確定：選択があればその範囲でトリミング、無ければ画像全体をそのまま採用（どちらも劣化なし）
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('button[data-act="confirmthumb"]');if(!b)return;
+  const uid=b.dataset.uid,dir=b.dataset.dir;
+  const wrap=document.getElementById('bigwrap-'+uid);
+  const file=wrap.dataset.file;
+  const sel=BIGSEL[uid];
+  const err=b.closest('.thumbtool').querySelector('.err');
+  err.textContent='';
+  if(!file){err.textContent='先に候補から画像を選んでください。';return;}
+  if(location.protocol==='file:'){err.textContent='この機能は serve_board.py 経由でのみ動きます。';return;}
+  const old=b.textContent;b.textContent='確定中…';b.disabled=true;
+  try{
+    let r;
+    if(sel){
+      r=await fetch('/__crop_image',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({dir,image:file,rect:`${sel.x},${sel.y},${sel.w},${sel.h}`})});
+    }else{
+      r=await fetch('/__select_thumb',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({dir,file})});
+    }
+    const j=await r.json();
+    if(!j.ok){err.textContent='失敗: '+(j.error||'不明なエラー');}
+    else{addThumb(uid,dir,j.file);}
+  }catch(ex){err.textContent='通信に失敗しました: '+ex;}
+  b.textContent=old;b.disabled=false;
+});
 """
 
 
@@ -427,18 +611,103 @@ def esc(s) -> str:
     return html.escape(str(s if s is not None else ""))
 
 
+def rel_dir(work_dir) -> str:
+    """works/ からの相対パス（例：<cid>_名前 または 進行中/<cid>_名前）。
+    サブフォルダに移動した作品でも正しく参照できるように、"/"区切りで返す。"""
+    return work_dir.relative_to(C.WORKS_DIR).as_posix()
+
+
 def rel_media(dir_name: str, file_name: str) -> str:
     """board_<cid>.html（works/直下）から見た動画への相対パス。
-    日本語フォルダ名でも壊れないよう各セグメントをURLエンコードする。"""
-    return (urllib.parse.quote(dir_name) + "/" + urllib.parse.quote(file_name))
+    日本語フォルダ名・サブフォルダでも壊れないよう各セグメントをURLエンコードする。"""
+    return "/".join(urllib.parse.quote(seg) for seg in dir_name.split("/") + [file_name])
+
+
+def render_thumbtool(e: dict, uid: str, dir_name: str) -> str:
+    """サムネ画像（1枚・高品質）を作るセクション。
+
+    流れ：①動画から静止画を切り抜く（任意・候補に追加される）
+          →②候補（採用画像＋切り抜いた静止画）を横スクロールで一覧表示
+          →③候補をクリックすると大きくプレビュー、その場でドラッグ選択（任意）
+          →④「✅ この画像でOK」で確定＝選択があればその範囲でトリミング、
+             無ければ画像全体をそのまま採用（どちらも再圧縮なしでコピーするので劣化しない）。
+    動画が無い作品でも②③④（採用画像からの確定・トリミング）は使えるようにする。
+    """
+    grab_row = ""
+    if e["has_movie"]:
+        gsrc = rel_media(dir_name, e["movie"])
+        # ★このボックス専用の動画プレーヤーを埋め込む（上の「動画を編集する」ボックスとは別・共有しない）。
+        grab_row = f"""      <div class="trow"><b>動画から切り抜く（任意・候補に追加されます）：</b></div>
+      <div class="vwrap gvwrap">
+        <video controls id="gvid-{uid}" src="{gsrc}" preload="metadata"></video>
+      </div>
+      <div class="trow">
+        <button class="grabbtn" data-vid="gvid-{uid}" data-dir="{esc(dir_name)}"
+                data-movie="{esc(e['movie'])}" data-uid="{uid}">📸 今の場面を候補に追加</button>
+        <span class="hintsm">動画を再生・一時停止して、いい瞬間で押す</span>
+      </div>"""
+
+    cands = ""
+    for f in list(e["images"]) + list(e["grabs"]):
+        isrc = rel_media(dir_name, f)
+        cands += (f'<div class="cand" data-file="{esc(f)}">'
+                  f'<img src="{isrc}" loading="lazy" draggable="false"></div>')
+    cand_row = (f'<div class="candrow" id="cand-{uid}" data-dir="{esc(dir_name)}">'
+                f'{cands}</div>' if cands else
+                f'<div class="candrow" id="cand-{uid}" data-dir="{esc(dir_name)}">'
+                '<p class="notice">候補画像がありません。</p></div>')
+
+    thumbs_html = ""
+    for f in e["thumbs"]:
+        tsrc = rel_media(dir_name, f)
+        thumbs_html += (
+            f'<div class="clip thumb" data-file="{esc(f)}">'
+            f'<img src="{tsrc}" loading="lazy">'
+            f'<div class="clip-h"><span>🖼 {esc(f)}</span>'
+            f'<span class="clip-act">'
+            f'<a class="dl" href="{tsrc}" download="{esc(f)}">⬇ 保存</a>'
+            f'<button class="del" data-file="{esc(f)}" '
+            f'data-dir="{esc(dir_name)}">🗑 削除</button></span></div></div>')
+    thumbs_block = (f'<div class="clips thumbgrid" id="thumbs-{uid}">{thumbs_html}</div>'
+                    if thumbs_html else
+                    f'<p class="notice" id="thumbs-{uid}-empty">まだサムネがありません。'
+                    '下の候補をクリックして選んでください。</p>')
+
+    return f"""    <div class="thumbtool">
+      <h3>🖼 サムネ画像を作る（1枚・高品質推奨）</h3>
+{grab_row}
+      <div class="trow"><b>候補（クリックで大きく表示）：</b></div>
+      {cand_row}
+
+      <div class="bigwrap" id="bigwrap-{uid}" style="display:none">
+        <div class="vwrap">
+          <img id="bigimg-{uid}" draggable="false">
+          <div class="sellayer imgsel" id="bigsel-{uid}"></div>
+        </div>
+        <div class="trow">
+          <span class="selinfo" id="bigsi-{uid}">ドラッグで範囲を選べます（選ばなければ全体を使用）</span>
+          <button class="go primary" data-act="confirmthumb" data-uid="{uid}"
+                  data-dir="{esc(dir_name)}">✅ この画像でOK</button>
+        </div>
+      </div>
+
+      <p class="err"></p>
+      <p class="hint">候補をクリック→大きい画像の上をドラッグすると範囲を選べます。
+         「✅ この画像でOK」で確定（選択が無ければ画像全体をそのまま採用）。
+         画質は落とさず、選んだ範囲をそのまま高品質で切り出します。作ったサムネは下に出るので、⬇保存でダウンロード。
+         採用画像がぼやけて見える場合は、動画から新しく切り抜くときれいに撮れます。</p>
+      {thumbs_block}
+    </div>"""
 
 
 def render_video(e: dict, uid: str) -> str:
-    """単一作品モードの動画ブロック（再生＋切り抜き＋保存）。"""
+    """単一作品モードの動画ブロック（再生＋切り抜き＋保存）。
+    動画が無い作品でも、サムネ作成（採用画像の選定・トリミング）は使えるようにする。"""
+    dir_name = rel_dir(e["dir"])
     if not e["has_movie"]:
         return ('      <p class="notice">この作品にはサンプル動画がありません'
-                '（画像のみ）。</p>')
-    dir_name = e["dir"].name
+                '（画像のみ）。</p>\n'
+                f'{render_thumbtool(e, uid, dir_name)}')
     src = rel_media(dir_name, e["movie"])
 
     clips = ""
@@ -454,6 +723,7 @@ def render_video(e: dict, uid: str) -> str:
                   f'<video controls src="{csrc}"></video></div>')
 
     return f"""      <div class="video">
+        <h3>🎬 動画を編集する</h3>
         <div class="vwrap" id="vwrap-{uid}">
           <video controls id="vid-{uid}" src="{src}" preload="metadata"></video>
           <div class="sellayer" id="sel-{uid}"></div>
@@ -475,7 +745,7 @@ def render_video(e: dict, uid: str) -> str:
              data-uid="{uid}" data-vid="vid-{uid}" data-layer="sel-{uid}"
              data-start="cs-{uid}" data-end="ce-{uid}">
           <span class="tool-label">🔲 画面を切る（X向けの形に）</span>
-          <label class="chk"><input type="checkbox" id="cr-{uid}">上の区間も使う</label>
+          <label class="chk"><input type="checkbox" id="cr-{uid}" checked>上の区間も使う</label>
 
           <div class="crow">
             <b>A. 範囲を自分で選ぶ：</b>
@@ -513,7 +783,8 @@ def render_video(e: dict, uid: str) -> str:
            画面を切るときは <b>A</b> で好きな範囲をドラッグ選択するか、<b>B</b> の比率プリセットが使えます。
            作った動画は下に出るので、⬇保存 → Finder から X にドラッグ。</p>
         <div class="clips" id="clips-{uid}">{clips}</div>
-      </div>"""
+      </div>
+{render_thumbtool(e, uid, dir_name)}"""
 
 
 def render_card(e: dict, post: dict, single: bool = False) -> str:
@@ -530,11 +801,10 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
         bits.append(f"★<b>{e['review_avg']:.2f}</b>"
                     f"（{e['review_count']}件）")
 
-    # 未成年連想ジャンルの注意喚起だけは残す（規制の安全弁なので消さない）。
+    # ★ユーザー方針（2026-07-20）：未成年連想ジャンルのオンページ警告は非表示にする
+    #   （画像は毎回目視確認しているとのこと）。判定自体（cautions）はターミナルに
+    #   ログするだけに留め、判定ロジックは削除しない（後で戻せるように）。
     notice = ""
-    if cautions:
-        notice = (f'<p class="notice">⚠️ <b>{esc("・".join(cautions))}</b> のジャンル付き。'
-                  f'<b>画像は未成年に見えないか必ず目視で確認</b>してから使ってください。</p>')
     if not e["has_meta"]:
         notice += ('<p class="notice">作品情報が取れていません（配信終了の可能性）。'
                    '<code>meta.py</code> で取り直せます。</p>')
@@ -575,46 +845,20 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def render(entries: list, posts: dict) -> str:
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    cards = "\n".join(render_card(e, posts.get(e["cid"], {}))
-                      for e in entries)
-    return f"""<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FANZA 投稿ボード</title>
-<style>{CSS}</style>
-</head>
-<body>
-<div class="wrap">
-<header>
-  <h1>FANZA 投稿ボード</h1>
-  <p class="lead">作品情報・投稿文・アフィリリンクをコピーして使うボード。
-     評価の高い作品から順に並んでいます。</p>
-  <p class="lead">流れは <b>①サブ投稿（リンク付き）を出す → ②メインでそれを引用</b>。
-     メイン投稿にリンクは貼りません。画像の選定・切り抜きは旧ボードで行います。</p>
-  <p class="lead">更新 {now} ／ 全 {len(entries)} 作品</p>
-</header>
-<div class="tools">
-  <input type="search" id="q" placeholder="作品名・cid・ジャンルで絞り込み">
-  <label class="chk"><input type="checkbox" id="hide">投稿済みを隠す</label>
-  <span class="count" id="cnt">{len(entries)} 件</span>
-</div>
-{cards}
-<p class="empty" id="empty" style="display:none">該当する作品がありません。</p>
-</div>
-<script>{JS}</script>
-</body>
-</html>
-"""
-
-
 def render_single(e: dict, post: dict) -> str:
     """単一作品ボード（動画つき）のHTML全体。"""
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     card = render_card(e, post, single=True)
+
+    # works/<日付>/ にある作品は、そこから開いたスケジュールダッシュボードへ
+    # 戻れるようにする（このHTML自体は works/ 直下にあるので相対パスで届く）。
+    # 全作品一覧（旧 board.html）は廃止したので、日付フォルダ外なら戻るリンクは出さない。
+    back_html = ""
+    date = C.date_of(e["dir"])
+    if date:
+        dash_href = urllib.parse.quote(date) + "/dashboard.html"
+        back_html = f'<a href="{dash_href}">← {esc(date)} の投稿スケジュールへ</a> ／ '
+
     return f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -628,7 +872,7 @@ def render_single(e: dict, post: dict) -> str:
 <header>
   <h1>{esc(e['title'])} <span class="cid">{esc(e['cid'])}</span></h1>
   <p class="lead">この作品ぶんの投稿ボード。動画は再生・切り抜き・保存ができます。</p>
-  <p class="lead"><a href="board.html">← 全作品の一覧へ</a> ／ 更新 {now}</p>
+  <p class="lead">{back_html}更新 {now}</p>
 </header>
 {card}
 </div>
@@ -653,7 +897,36 @@ def build_single(cid: str, cfg: dict, regen: bool):
     print(f"✓ 単一作品ボードを作りました: {out}")
     if not match["has_movie"]:
         print("  ※ この作品にはサンプル動画がありません（切り抜きは使えません）。")
+    cautions = posts.get(cid, {}).get("cautions") or []
+    if cautions:
+        print(f"  ⚠️ {cid}: {'・'.join(cautions)} のジャンル付き。"
+              "画像は未成年に見えないか目視で確認してください。")
     return out
+
+
+def rebuild_all(cfg: dict, regen: bool = False) -> int:
+    """works/ 配下の全作品ぶんの個別ボードを作り直す。
+    テンプレート（このファイルのHTML/CSS/JS）を変更したときに、
+    「一部の作品だけ再生成し忘れる」を防ぐための一括コマンド。
+    schedule_board.py が入っていれば、日付ダッシュボードも合わせて作り直す。"""
+    entries = collect(cfg)
+    if not entries:
+        print("works/ に作品フォルダがありません。")
+        return 1
+    for e in entries:
+        build_single(e["cid"], cfg, regen)
+    print(f"\n✓ 個別ボード {len(entries)} 件を再生成しました。")
+
+    try:
+        import schedule_board as SB
+    except Exception:
+        return 0
+    dates = C.date_dirs()
+    for d in dates:
+        SB.build_for_date(d.name, cfg)
+    if dates:
+        print(f"✓ 日付ダッシュボード {len(dates)} 件も再生成しました。")
+    return 0
 
 
 def main(argv) -> int:
@@ -662,40 +935,29 @@ def main(argv) -> int:
     cfg = C.load_config(require_api=False)
     regen = "--regen" in flags
 
-    # cid が渡されたら、その1作品だけのボード（動画つき）を作る。
-    if positional:
-        cid = positional[0]
-        out = build_single(cid, cfg, regen)
-        if out is None:
-            return 1
-        print("  切り抜きを使うには: "
-              f"python3 fanza_auto/scripts/serve_board.py {cid}")
-        if "--open" in flags:
-            subprocess.run(["open", str(out)], check=False)
-        return 0
+    # --all：全作品の個別ボード（＋日付ダッシュボード）を一括で作り直す。
+    # テンプレートを変更した直後は、cidを1つずつ指定するより --all を使うこと
+    # （一部の作品だけ再生成し忘れる事故を防ぐ）。
+    if "--all" in flags:
+        return rebuild_all(cfg, regen)
 
-    entries = collect(cfg)
-    if not entries:
-        print("works/ に作品フォルダがありません。"
-              "先に fetch_and_build.py を実行してください。")
+    # cid を指定して、その1作品だけのボード（動画つき）を作る。
+    # 全作品一覧（旧 board.html）は廃止：一覧は schedule_board.py
+    # （works/<日付>/dashboard.html）が担う。
+    if not positional:
+        print("使い方: python3 fanza_auto/scripts/build_board.py <cid> [--open] [--regen]")
+        print("       python3 fanza_auto/scripts/build_board.py --all [--regen]   # 全作品を一括再生成")
+        print("  例) python3 fanza_auto/scripts/build_board.py debz015")
         return 1
 
-    no_meta = [e for e in entries if not e["has_meta"]]
-    if no_meta:
-        print(f"  ※ 作品情報が無いフォルダが {len(no_meta)} 件あります。"
-              "`python3 fanza_auto/scripts/meta.py` で取得できます。")
-
-    posts = ensure_posts(entries, regen=regen)
-    entries.sort(key=sort_key)
-    BOARD_HTML.write_text(render(entries, posts), encoding="utf-8")
-
-    print(f"✓ ボードを作りました: {BOARD_HTML}")
-    print(f"  {len(entries)} 作品 ／ 投稿文は works/posts.json に保存"
-          "（作り直すときは --regen）")
+    cid = positional[0]
+    out = build_single(cid, cfg, regen)
+    if out is None:
+        return 1
+    print("  切り抜きを使うには: "
+          f"python3 fanza_auto/scripts/serve_board.py {cid}")
     if "--open" in flags:
-        subprocess.run(["open", str(BOARD_HTML)], check=False)
-    else:
-        print(f"  開く: open {BOARD_HTML}")
+        subprocess.run(["open", str(out)], check=False)
     return 0
 
 
