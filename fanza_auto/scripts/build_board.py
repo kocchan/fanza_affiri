@@ -112,7 +112,9 @@ def collect(cfg: dict) -> list:
             "n_images": len(list(d.glob("[0-9][0-9].jpg"))),
             # 動画まわり（単一作品モードで使う）
             "movie": "sample.mp4" if (d / "sample.mp4").is_file() else "",
-            "clips": sorted(p.name for p in d.glob("cut_*.mp4")),
+            # 手動で作った素材（区間切り cut_* ＋ 画面トリミング crop_*）
+            "clips": sorted(p.name for p in d.glob("*.mp4")
+                            if p.name.startswith(("cut_", "crop_"))),
         })
     return entries
 
@@ -183,14 +185,31 @@ a{color:var(--accent)}
 .empty{text-align:center;color:var(--sub);padding:40px 0}
 /* 動画（単一作品モード） */
 .video{margin:0 0 16px}
-.video video{width:100%;max-height:70vh;background:#000;border-radius:10px;display:block}
-.cuttool{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 4px}
-.cuttool label{font-size:.82rem;color:var(--sub);display:flex;gap:4px;align-items:center}
-.cuttool input{width:74px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;
- background:var(--card);color:var(--fg);font-size:.85rem;font-family:ui-monospace,Menlo,monospace}
+.vwrap{position:relative;line-height:0;border-radius:10px;overflow:hidden}
+.video video{width:100%;max-height:70vh;background:#000;display:block}
+/* 範囲選択オーバーレイ（普段は非表示。選択モードON時だけ有効） */
+.sellayer{position:absolute;inset:0;display:none;cursor:crosshair;touch-action:none;
+ background:rgba(0,0,0,.25)}
+.sellayer.on{display:block}
+.sellayer .selbox{position:absolute;border:2px solid #fff;outline:2px solid var(--accent);
+ background:rgba(194,24,91,.18);box-shadow:0 0 0 9999px rgba(0,0,0,.35)}
+.crow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;width:100%}
+.crow b{font-size:.8rem;color:var(--fg)}
+.selinfo{font-size:.78rem;color:var(--sub)}
+.selbtn{font-size:.8rem}
+.selbtn.on{background:var(--accent);color:#fff;border-color:transparent}
+.cuttool,.croptool{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 4px;
+ padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.tool-label{font-size:.8rem;font-weight:700;color:var(--fg);width:100%}
+.cuttool label,.croptool label{font-size:.82rem;color:var(--sub);display:flex;gap:4px;align-items:center}
+.cuttool input[type=text],.cuttool input:not([type]){width:74px}
+.cuttool input,.croptool select{padding:5px 8px;border:1px solid var(--line);border-radius:6px;
+ background:var(--card);color:var(--fg);font-size:.85rem}
+.cuttool input{width:74px;font-family:ui-monospace,Menlo,monospace}
+.croptool .chk{gap:5px}
 .cuttool .now{padding:4px 8px;font-size:.74rem}
-.cuttool .go{background:var(--accent);color:#fff;border-color:transparent;font-weight:700}
-.cuttool .go:hover{opacity:.9;color:#fff}
+.cuttool .go,.croptool .go{background:var(--accent);color:#fff;border-color:transparent;font-weight:700}
+.cuttool .go:hover,.croptool .go:hover{opacity:.9;color:#fff}
 .hint{font-size:.78rem;color:var(--sub);margin:0 0 8px}
 .clips{display:flex;flex-direction:column;gap:12px}
 .clip{border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--bg)}
@@ -200,6 +219,9 @@ a{color:var(--accent)}
 .dl{display:inline-block;border:1px solid var(--line);border-radius:7px;padding:5px 12px;
  font-size:.8rem;text-decoration:none;color:var(--fg)}
 .dl:hover{border-color:var(--accent);color:var(--accent)}
+.clip-act{display:flex;gap:6px;align-items:center}
+button.del{font-size:.78rem;padding:5px 10px;color:var(--sub)}
+button.del:hover{border-color:#dc2626;color:#dc2626}
 .err{color:var(--accent);font-size:.8rem;margin:6px 0 0}
 """
 
@@ -271,39 +293,133 @@ document.addEventListener('click',e=>{
   if(vid&&inp)inp.value=secStr(vid.currentTime||0);
 });
 
-// 「切り抜く」ボタン：サーバーに cut を投げ、返ってきた mp4 を下に足す。
+// ── 範囲選択（ドラッグで四角を描く）─────────────────
+// 選択結果は sellayer に px（動画の実ピクセル座標）で覚えさせる。
+const SEL={};   // uid -> {x,y,w,h}（動画ピクセル）
+document.addEventListener('click',e=>{
+  const b=e.target.closest('.selbtn');if(!b)return;
+  const uid=b.dataset.uid;
+  const layer=document.getElementById('sel-'+uid);
+  const on=layer.classList.toggle('on');
+  b.classList.toggle('on',on);
+  b.textContent=on?'▭ 選択中（もう一度で終了）':'▭ 範囲を選ぶ';
+});
+function bindSelect(layer){
+  const uid=layer.id.slice(4);
+  let box=null, sx=0, sy=0, drawing=false;
+  const info=document.getElementById('si-'+uid);
+  const applyBtn=layer.closest('.video').querySelector('button[data-act="croprect"]');
+  const pt=ev=>{const r=layer.getBoundingClientRect();
+    return {x:Math.max(0,Math.min(ev.clientX-r.left,r.width)),
+            y:Math.max(0,Math.min(ev.clientY-r.top,r.height)),r};};
+  layer.addEventListener('pointerdown',ev=>{
+    ev.preventDefault();drawing=true;const p=pt(ev);sx=p.x;sy=p.y;
+    if(box)box.remove();
+    box=document.createElement('div');box.className='selbox';layer.appendChild(box);
+    layer.setPointerCapture(ev.pointerId);
+  });
+  layer.addEventListener('pointermove',ev=>{
+    if(!drawing||!box)return;const p=pt(ev);
+    const x=Math.min(sx,p.x),y=Math.min(sy,p.y),w=Math.abs(p.x-sx),h=Math.abs(p.y-sy);
+    box.style.left=x+'px';box.style.top=y+'px';box.style.width=w+'px';box.style.height=h+'px';
+  });
+  layer.addEventListener('pointerup',ev=>{
+    if(!drawing)return;drawing=false;
+    const vid=document.getElementById('vid-'+uid);
+    const r=layer.getBoundingClientRect();
+    const scaleX=(vid.videoWidth||r.width)/r.width, scaleY=(vid.videoHeight||r.height)/r.height;
+    const bx=box.offsetLeft*scaleX, by=box.offsetTop*scaleY,
+          bw=box.offsetWidth*scaleX, bh=box.offsetHeight*scaleY;
+    if(bw<8||bh<8){info.textContent='もう少し大きく囲ってください';applyBtn.disabled=true;return;}
+    SEL[uid]={x:Math.round(bx),y:Math.round(by),w:Math.round(bw),h:Math.round(bh)};
+    info.textContent=`選択：${SEL[uid].w}×${SEL[uid].h}px`;
+    applyBtn.disabled=false;
+  });
+}
+document.querySelectorAll('.sellayer').forEach(bindSelect);
+
+// 実行ボタン：時間切り(cut) / 比率crop / 手動範囲croprect をサーバーに投げる。
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button.go');if(!b)return;
-  const box=b.closest('.cuttool');
-  const dir=box.dataset.dir, movie=box.dataset.movie;
+  const act=b.dataset.act;                    // 'cut' / 'crop' / 'croprect'
+  const box=b.closest('.cuttool,.croptool');
+  const uid=box.dataset.uid, dir=box.dataset.dir, movie=box.dataset.movie;
+  const err=box.closest('.video').querySelector('.err');
+  err.textContent='';
+  if(location.protocol==='file:'){
+    err.textContent='この機能は serve_board.py 経由でのみ動きます（今は file:// で開いています）。';return;}
+
+  // 区間の秒（時間で切る欄と共有）
   const s=document.getElementById(box.dataset.start).value.trim();
   const en=document.getElementById(box.dataset.end).value.trim();
-  const err=box.parentElement.querySelector('.err');
-  err.textContent='';
-  if(s===''||en===''){err.textContent='開始と終了の秒を入れてください。';return;}
-  if(parseFloat(en)<=parseFloat(s)){err.textContent='終了は開始より後にしてください。';return;}
-  if(location.protocol==='file:'){
-    err.textContent='切り抜きは serve_board.py 経由でのみ動きます（このページは file:// で開いています）。';return;}
-  const old=b.textContent;b.textContent='切り抜き中…';b.disabled=true;
+  const useRange=()=>{const c=document.getElementById('cr-'+uid);return c&&c.checked;};
+  const withRange=(p)=>{
+    if(useRange()){
+      if(s===''||en===''){err.textContent='「区間も使う」なら開始と終了の秒を入れてください。';return false;}
+      if(parseFloat(en)<=parseFloat(s)){err.textContent='終了は開始より後にしてください。';return false;}
+      p.start=s;p.end=en;}
+    return true;};
+
+  let url, payload, label;
+  if(act==='cut'){
+    if(s===''||en===''){err.textContent='開始と終了の秒を入れてください。';return;}
+    if(parseFloat(en)<=parseFloat(s)){err.textContent='終了は開始より後にしてください。';return;}
+    url='/__cut'; payload={dir,video:movie,start:s,end:en}; label='✂ '+s+'〜'+en;
+  }else if(act==='croprect'){
+    const sel=SEL[uid];
+    if(!sel){err.textContent='先に「範囲を選ぶ」で動画上をドラッグしてください。';return;}
+    payload={dir,video:movie,rect:`${sel.x},${sel.y},${sel.w},${sel.h}`};
+    if(!withRange(payload))return;
+    url='/__crop'; label='🔲 選択'+sel.w+'×'+sel.h+(useRange()?(' '+s+'〜'+en):'');
+  }else{
+    const aspect=document.getElementById('ca-'+uid).value;
+    const pos=document.getElementById('cp-'+uid).value;
+    payload={dir,video:movie,aspect,pos};
+    if(!withRange(payload))return;
+    url='/__crop'; label='🔲 '+aspect+' '+pos+(useRange()?(' '+s+'〜'+en):'');
+  }
+
+  const old=b.textContent;b.textContent='処理中…';b.disabled=true;
   try{
-    const r=await fetch('/__cut',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({dir,video:movie,start:s,end:en})});
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)});
     const j=await r.json();
     if(!j.ok){err.textContent='失敗: '+(j.error||'不明なエラー');}
-    else{addClip(box.dataset.uid,dir,j.file,s+'〜'+en);}
+    else{addClip(uid,dir,j.file,label);}
   }catch(ex){err.textContent='通信に失敗しました: '+ex;}
   b.textContent=old;b.disabled=false;
 });
 
-function addClip(uid,dir,file,range){
+function addClip(uid,dir,file,label){
   const wrap=document.getElementById('clips-'+uid);
   const src=dir.split('/').map(encodeURIComponent).join('/')+'/'+encodeURIComponent(file);
-  const el=document.createElement('div');el.className='clip';
-  el.innerHTML=`<div class="clip-h"><span>✂ ${range}　${file}</span>
-    <a class="dl" href="${src}" download="${file}">⬇ 保存</a></div>
+  const el=document.createElement('div');el.className='clip';el.dataset.file=file;
+  el.innerHTML=`<div class="clip-h"><span>${label}　${file}</span>
+    <span class="clip-act"><a class="dl" href="${src}" download="${file}">⬇ 保存</a>
+    <button class="del" data-file="${file}" data-dir="${dir}">🗑 削除</button></span></div>
     <video controls src="${src}"></video>`;
   wrap.prepend(el);
 }
+
+// 作った素材の削除（元動画は消せない＝サーバー側で cut_/crop_ のみ許可）
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('button.del');if(!b)return;
+  const file=b.dataset.file, dir=b.dataset.dir;
+  const clip=b.closest('.clip');
+  const err=b.closest('.video').querySelector('.err');
+  err.textContent='';
+  if(location.protocol==='file:'){
+    err.textContent='削除は serve_board.py 経由でのみ動きます（今は file:// で開いています）。';return;}
+  if(!confirm(`「${file}」を削除します。元に戻せません。よろしいですか？`))return;
+  const old=b.textContent;b.textContent='削除中…';b.disabled=true;
+  try{
+    const r=await fetch('/__del',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({dir,file})});
+    const j=await r.json();
+    if(!j.ok){err.textContent='削除に失敗: '+(j.error||'不明なエラー');b.textContent=old;b.disabled=false;}
+    else{clip.remove();}
+  }catch(ex){err.textContent='通信に失敗しました: '+ex;b.textContent=old;b.disabled=false;}
+});
 """
 
 
@@ -328,25 +444,74 @@ def render_video(e: dict, uid: str) -> str:
     clips = ""
     for f in e["clips"]:
         csrc = rel_media(dir_name, f)
-        clips += (f'<div class="clip"><div class="clip-h"><span>✂ {esc(f)}</span>'
-                  f'<a class="dl" href="{csrc}" download="{esc(f)}">⬇ 保存</a></div>'
+        icon = "🔲" if f.startswith("crop_") else "✂"
+        clips += (f'<div class="clip" data-file="{esc(f)}">'
+                  f'<div class="clip-h"><span>{icon} {esc(f)}</span>'
+                  f'<span class="clip-act">'
+                  f'<a class="dl" href="{csrc}" download="{esc(f)}">⬇ 保存</a>'
+                  f'<button class="del" data-file="{esc(f)}" '
+                  f'data-dir="{esc(dir_name)}">🗑 削除</button></span></div>'
                   f'<video controls src="{csrc}"></video></div>')
 
     return f"""      <div class="video">
-        <video controls id="vid-{uid}" src="{src}" preload="metadata"></video>
+        <div class="vwrap" id="vwrap-{uid}">
+          <video controls id="vid-{uid}" src="{src}" preload="metadata"></video>
+          <div class="sellayer" id="sel-{uid}"></div>
+        </div>
+
         <div class="cuttool" data-vid="vid-{uid}" data-dir="{esc(dir_name)}"
              data-movie="{esc(e['movie'])}" data-uid="{uid}"
              data-start="cs-{uid}" data-end="ce-{uid}">
+          <span class="tool-label">⏱ 時間で切る</span>
           <label>開始<input id="cs-{uid}" inputmode="decimal" placeholder="秒"></label>
           <button class="now" data-for="cs-{uid}">現在</button>
           <label>終了<input id="ce-{uid}" inputmode="decimal" placeholder="秒"></label>
           <button class="now" data-for="ce-{uid}">現在</button>
-          <button class="go">✂ 切り抜く</button>
-          <a class="dl" href="{src}" download="{esc(e['cid'])}.mp4">⬇ 動画を保存</a>
+          <button class="go" data-act="cut">✂ 切り抜く</button>
+          <a class="dl" href="{src}" download="{esc(e['cid'])}.mp4">⬇ 元動画を保存</a>
         </div>
+
+        <div class="croptool" data-dir="{esc(dir_name)}" data-movie="{esc(e['movie'])}"
+             data-uid="{uid}" data-vid="vid-{uid}" data-layer="sel-{uid}"
+             data-start="cs-{uid}" data-end="ce-{uid}">
+          <span class="tool-label">🔲 画面を切る（X向けの形に）</span>
+          <label class="chk"><input type="checkbox" id="cr-{uid}">上の区間も使う</label>
+
+          <div class="crow">
+            <b>A. 範囲を自分で選ぶ：</b>
+            <button class="selbtn" data-uid="{uid}">▭ 範囲を選ぶ</button>
+            <span class="selinfo" id="si-{uid}">動画の上をドラッグして四角を作る</span>
+            <button class="go" data-act="croprect" disabled>この範囲で切る</button>
+          </div>
+
+          <div class="crow">
+            <b>B. 比率で自動：</b>
+            <label>比率
+              <select id="ca-{uid}">
+                <option value="1:1">正方形 1:1</option>
+                <option value="9:16">縦長 9:16</option>
+                <option value="4:5">縦 4:5</option>
+                <option value="16:9">横 16:9</option>
+              </select>
+            </label>
+            <label>位置
+              <select id="cp-{uid}">
+                <option value="center">中央</option>
+                <option value="left">左</option>
+                <option value="right">右</option>
+                <option value="top">上</option>
+                <option value="bottom">下</option>
+              </select>
+            </label>
+            <button class="go" data-act="crop">比率で切る</button>
+          </div>
+        </div>
+
         <p class="err"></p>
-        <p class="hint">「現在」を押すと今の再生位置（秒）が入ります。
-           切り抜いた動画は下に出るので、⬇保存 → Finder から X にドラッグ。</p>
+        <p class="hint">「現在」で今の再生位置（秒）が入ります。
+           <b>時間で切る</b>＝長さを短く、<b>画面を切る</b>＝縦長/正方形など形を変える。
+           画面を切るときは <b>A</b> で好きな範囲をドラッグ選択するか、<b>B</b> の比率プリセットが使えます。
+           作った動画は下に出るので、⬇保存 → Finder から X にドラッグ。</p>
         <div class="clips" id="clips-{uid}">{clips}</div>
       </div>"""
 
@@ -356,35 +521,20 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
     uid = cid.replace(".", "_")
     cautions = post.get("cautions") or []
 
-    # メタ情報の行
+    # ★ユーザー方針（2026-07-20）：ボードは「投稿にすぐ使うもの」だけを出す。
+    #   収録時間/発売日/メーカー/ジャンルのメタ表示、賑やかし、アフィリンク単体は非表示。
+    #   （アフィリンクは①サブ投稿の本文に入っているので、そちらでコピーできる）
+    #   ★レビュー★だけは作品選びの判断に使うので残す。
     bits = []
     if e["review_avg"] is not None:
         bits.append(f"★<b>{e['review_avg']:.2f}</b>"
                     f"（{e['review_count']}件）")
-    if e["duration"]:
-        bits.append(f"収録 <b>{esc(e['duration'])}</b>")
-    if e["date"]:
-        bits.append(f"発売 {esc(e['date'])}")
-    if e["maker"]:
-        bits.append(f"メーカー {esc(e['maker'])}")
-    assets = []
-    if e["has_movie"]:
-        assets.append("動画あり")
-    if e["n_images"]:
-        assets.append(f"画像{e['n_images']}枚")
-    if assets:
-        bits.append(" / ".join(assets))
 
-    tags = "".join(
-        f'<span class="tag{" warn" if g in PT.CAUTION_GENRES else ""}">{esc(g)}</span>'
-        for g in e["genres"])
-
+    # 未成年連想ジャンルの注意喚起だけは残す（規制の安全弁なので消さない）。
     notice = ""
     if cautions:
-        notice = (f'<p class="notice">⚠️ このジャンルが付いています：'
-                  f'<b>{esc("・".join(cautions))}</b>。'
-                  f'投稿文には出していませんが、<b>画像は未成年に見えないか必ず目視で確認</b>'
-                  f'してから使ってください。</p>')
+        notice = (f'<p class="notice">⚠️ <b>{esc("・".join(cautions))}</b> のジャンル付き。'
+                  f'<b>画像は未成年に見えないか必ず目視で確認</b>してから使ってください。</p>')
     if not e["has_meta"]:
         notice += ('<p class="notice">作品情報が取れていません（配信終了の可能性）。'
                    '<code>meta.py</code> で取り直せます。</p>')
@@ -396,15 +546,14 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
         <pre class="{extra_cls}" id="{elid}">{esc(text)}</pre>
       </div>"""
 
-    boosters = "\n".join(f"・{b}" for b in post.get("boosters", []))
+    # 検索は今も作品名・cid・ジャンル・メーカーで引けるようにしておく（表示はしない）
     search = f"{e['title']} {cid} {' '.join(e['genres'])} {e['maker']}".lower()
 
     parts = [
         f'    <article class="card" data-cid="{esc(cid)}" '
         f'data-search="{esc(search)}">',
         f'      <h2>{esc(e["title"])}<span class="cid">{esc(cid)}</span></h2>',
-        f'      <p class="meta">{" ".join(bits)}</p>',
-        f'      <div class="tags">{tags}</div>' if tags else "",
+        f'      <p class="meta">{" ".join(bits)}</p>' if bits else "",
         notice,
         render_video(e, uid) if single else "",
         f'      <span class="pat">型：{esc(post.get("label", ""))}</span>',
@@ -413,12 +562,6 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
         block("② メイン投稿（①を引用して出す・リンクは貼らない）",
               post.get("main", ""), f"main-{uid}"),
     ]
-    if boosters:
-        parts.append(block("③ 賑やかし（サブへのリプ・1〜2件だけ）",
-                           boosters, f"bst-{uid}"))
-    if e["aff_url"]:
-        parts.append(block("アフィリエイトリンク（単体）", e["aff_url"],
-                           f"aff-{uid}", "link"))
 
     page = (f'<a href="{esc(e["page_url"])}" target="_blank" '
             f'rel="noopener">FANZAの作品ページ →</a>') if e["page_url"] else ""

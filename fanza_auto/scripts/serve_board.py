@@ -35,6 +35,7 @@ import common as C
 
 ROOT = str(C.WORKS_DIR)
 CUT_PY = str(C.ROOT / "scripts" / "cut_video.py")
+CROP_PY = str(C.ROOT / "scripts" / "crop_video.py")
 
 
 def lan_ip() -> str:
@@ -123,41 +124,118 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return None
         return folder
 
-    # ── 切り抜き（POST /__cut）──────────────────────────
+    def _resolve_src(self, req):
+        """dir/video を検証して元動画のフルパスを返す。ダメなら (None, エラー応答用dict)。"""
+        folder = self._safe_dir(req.get("dir"))
+        video = (req.get("video") or "sample.mp4").strip()
+        if not folder:
+            return None, {"ok": False, "error": "dir が不正"}
+        if os.path.basename(video) != video:
+            return None, {"ok": False, "error": "動画名が不正"}
+        src = os.path.join(folder, video)
+        if not os.path.isfile(src):
+            return None, {"ok": False, "error": "動画が見つかりません"}
+        return src, None
+
+    @staticmethod
+    def _tag(x):
+        return str(x).replace(":", "-").replace(".", "_")
+
+    @staticmethod
+    def _cleanup(path):
+        """途中で失敗したときの壊れた出力ファイルを消す。"""
+        try:
+            if path and os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+    # ── 動画の切り抜き（区間 /__cut）・画面トリミング（/__crop）・削除（/__del）──
     def do_POST(self):
-        if self.path.split("?")[0] != "/__cut":
+        path = self.path.split("?")[0]
+        if path not in ("/__cut", "/__crop", "/__del"):
             return self.send_error(404, "not found")
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b"{}"
         try:
             req = json.loads(body or b"{}")
-            folder = self._safe_dir(req.get("dir"))
-            video = (req.get("video") or "sample.mp4").strip()
-            start = str(req.get("start", "")).strip()
-            end = str(req.get("end", "")).strip()
-            if not folder or not start or not end:
-                return self._json(400, {"ok": False, "error": "dir/start/end が必要"})
-            if os.path.basename(video) != video:
-                return self._json(400, {"ok": False, "error": "動画名が不正"})
-            src = os.path.join(folder, video)
-            if not os.path.isfile(src):
-                return self._json(404, {"ok": False, "error": "動画が見つかりません"})
 
-            def tag(x):
-                return x.replace(":", "-").replace(".", "_")
-            out_name = f"cut_{tag(start)}-{tag(end)}.mp4"
-            dst = os.path.join(folder, out_name)
-            r = subprocess.run(
-                [sys.executable, CUT_PY, src, start, end, dst],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, timeout=300)
+            # 作った素材（cut_/crop_）だけを削除する。元動画や他ファイルは消せない。
+            if path == "/__del":
+                folder = self._safe_dir(req.get("dir"))
+                name = (req.get("file") or "").strip()
+                if not folder:
+                    return self._json(400, {"ok": False, "error": "dir が不正"})
+                if (os.path.basename(name) != name
+                        or not name.startswith(("cut_", "crop_"))
+                        or not name.endswith(".mp4")):
+                    return self._json(400, {"ok": False,
+                                            "error": "削除できるのは cut_/crop_ の mp4 だけです"})
+                target = os.path.join(folder, name)
+                if not os.path.isfile(target):
+                    return self._json(404, {"ok": False, "error": "ファイルが見つかりません"})
+                os.remove(target)
+                print(f"  🗑 削除: {req.get('dir')}/{name}")
+                return self._json(200, {"ok": True, "file": name})
+
+            src, err = self._resolve_src(req)
+            if err:
+                return self._json(400, err)
+
+            if path == "/__cut":
+                start = str(req.get("start", "")).strip()
+                end = str(req.get("end", "")).strip()
+                if not start or not end:
+                    return self._json(400, {"ok": False, "error": "start/end が必要"})
+                out_name = f"cut_{self._tag(start)}-{self._tag(end)}.mp4"
+                cmd = [sys.executable, CUT_PY, src, start, end,
+                       os.path.join(os.path.dirname(src), out_name)]
+                label = "✂ 切り抜き"
+            else:  # /__crop（画面トリミング）
+                start = str(req.get("start", "")).strip()
+                end = str(req.get("end", "")).strip()
+                rect = (req.get("rect") or "").strip()
+                if rect:
+                    # 手動範囲："x,y,w,h"（数値4つ）
+                    parts = rect.split(",")
+                    if len(parts) != 4 or not all(
+                            p.strip().lstrip("-").replace(".", "", 1).isdigit()
+                            for p in parts):
+                        return self._json(400, {"ok": False,
+                                                "error": "rect は x,y,w,h の数値"})
+                    spec, pos = rect, "-"
+                    xs = "_".join(str(int(float(p))) for p in parts)
+                    name = f"crop_sel_{xs}"
+                else:
+                    aspect = (req.get("aspect") or "").strip()
+                    pos = (req.get("pos") or "center").strip()
+                    if ":" not in aspect:
+                        return self._json(400, {"ok": False,
+                                                "error": "aspect か rect が必要"})
+                    if pos not in ("center", "left", "right", "top", "bottom"):
+                        return self._json(400, {"ok": False, "error": "pos が不正"})
+                    spec = aspect
+                    name = f"crop_{aspect.replace(':', 'x')}_{pos}"
+                if start and end:
+                    name += f"_{self._tag(start)}-{self._tag(end)}"
+                out_name = name + ".mp4"
+                cmd = [sys.executable, CROP_PY, src, spec, pos,
+                       start, end, os.path.join(os.path.dirname(src), out_name)]
+                label = "🔲 画面トリミング"
+
+            dst = os.path.join(os.path.dirname(src), out_name)
+            try:
+                r = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, timeout=300)
+            except subprocess.TimeoutExpired:
+                self._cleanup(dst)
+                return self._json(500, {"ok": False, "error": "処理がタイムアウトしました"})
             if r.returncode != 0 or not os.path.isfile(dst):
+                self._cleanup(dst)   # 失敗時に壊れた部分ファイルを残さない
                 return self._json(500, {"ok": False,
                                         "error": (r.stdout or "")[-400:]})
-            print(f"  ✂ 切り抜き: {req.get('dir')}/{out_name}")
+            print(f"  {label}: {req.get('dir')}/{out_name}")
             return self._json(200, {"ok": True, "file": out_name})
-        except subprocess.TimeoutExpired:
-            return self._json(500, {"ok": False, "error": "処理がタイムアウトしました"})
         except Exception as ex:
             return self._json(500, {"ok": False, "error": str(ex)})
 

@@ -83,8 +83,10 @@ def main(argv):
         "-ss", f"{start:.3f}",
         "-i", src,
         "-t", f"{duration:.3f}",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        "-c:a", "aac", "-b:a", "128k",
+        # 画質優先：crf 18（ほぼ視覚劣化なし）＋ preset medium（速度と画質のバランス）。
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         dst,
     ]
