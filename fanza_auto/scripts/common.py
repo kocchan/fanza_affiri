@@ -66,6 +66,9 @@ DEFAULT_CONFIG = {
     "movie_all": False,
     "extract_safe": True,
     "safe_frames_top_n": 10,
+    # ★ユーザー方針（2026-07-20）：bit.ly短縮は使わず、元のフルURLをそのまま使う。
+    #   shorten_url() はこのフラグを見て、false なら何もせず元URLを返す。
+    "shorten_links": False,
     "aff_link": {
         "af_id": "mokumoku555-001",
         "ch": "reward_ranking",
@@ -117,9 +120,13 @@ BITLY_API = "https://api-ssl.bitly.com/v4/shorten"
 
 
 def shorten_url(url: str, cfg: dict) -> str:
-    """アフィリンクを bit.ly で短縮する。トークン未設定・失敗時は元のURLをそのまま返す
-    （短縮は“できたら便利”な機能なので、失敗しても投稿文生成自体は止めない）。"""
-    token = (cfg or {}).get("bitly_token")
+    """アフィリンクを bit.ly で短縮する。config.json の shorten_links が false
+    （既定）なら何もせず元のフルURLを返す。トークン未設定・失敗時も同様に元URLのまま
+    （短縮は任意機能なので、失敗しても投稿文生成自体は止めない）。"""
+    cfg = cfg or {}
+    if not cfg.get("shorten_links", False):
+        return url
+    token = cfg.get("bitly_token")
     if not url or not token:
         return url
     try:

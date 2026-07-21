@@ -99,6 +99,16 @@ a.open{font-size:.82rem;font-weight:600}
 .empty{text-align:center;color:var(--sub);padding:40px 0}
 .badge{font-size:.72rem;padding:2px 9px;border-radius:999px;background:var(--okbg);color:var(--ok);
  font-weight:600}
+.fetchbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.fetchbar input{flex:1;min-width:240px;padding:9px 12px;border:1px solid var(--line);
+ border-radius:8px;background:var(--card);color:var(--fg);font-size:.9rem}
+.fetchbar button{background:var(--accent);color:#fff;border-color:transparent;font-weight:700;
+ padding:9px 16px;white-space:nowrap}
+.fetchbar button:hover{opacity:.9;color:#fff}
+.fetchbar button:disabled{opacity:.5;cursor:default}
+.fetch-status{font-size:.82rem;color:var(--sub)}
+.fetch-status.ok{color:var(--ok)}
+.fetch-status.err{color:var(--accent)}
 """
 
 JS = """
@@ -152,6 +162,39 @@ document.addEventListener('click',async e=>{
     if(!j.ok){alert('削除に失敗: '+(j.error||'不明なエラー'));b.textContent=old;b.disabled=false;}
     else{clip.remove();}
   }catch(ex){alert('通信に失敗しました: '+ex);b.textContent=old;b.disabled=false;}
+});
+
+// URLを貼って新規作品をこの日付に取り込む
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('#fetch-go');if(!b)return;
+  const input=document.getElementById('fetch-url');
+  const status=document.getElementById('fetch-status');
+  const url=input.value.trim();
+  status.className='fetch-status';status.textContent='';
+  if(!url){status.className='fetch-status err';status.textContent='URLかcidを入力してください';return;}
+  if(location.protocol==='file:'){
+    status.className='fetch-status err';
+    status.textContent='取り込みは serve_schedule.py 経由でのみ動きます。';return;}
+  const old=b.textContent;b.textContent='取り込み中…（数十秒かかります）';b.disabled=true;input.disabled=true;
+  status.className='fetch-status';status.textContent='DMMから取得中…画像/動画のダウンロードと安全チェックをしています。';
+  try{
+    const r=await fetch('/__fetch',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url})});
+    const j=await r.json();
+    if(!j.ok){
+      status.className='fetch-status err';status.textContent='失敗: '+(j.error||'不明なエラー');
+      b.textContent=old;b.disabled=false;input.disabled=false;
+    }else{
+      status.className='fetch-status ok';status.textContent=`✓ 取り込みました: ${j.title}（反映中…）`;
+      location.reload();   // 新しいカードを含む最新の dashboard.html を読み直す
+    }
+  }catch(ex){
+    status.className='fetch-status err';status.textContent='通信に失敗しました: '+ex;
+    b.textContent=old;b.disabled=false;input.disabled=false;
+  }
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&e.target.id==='fetch-url')document.getElementById('fetch-go').click();
 });
 """
 
@@ -268,6 +311,11 @@ def render(date: str, entries: list, posts: dict, date_dir) -> str:
   <p class="lead">この日に投稿する作品をまとめて確認・コピー作業する。
      詳しい画像/動画編集は各作品の個別ページで行う。</p>
   <p class="lead">更新 {now}</p>
+  <div class="fetchbar">
+    <input type="text" id="fetch-url" placeholder="FANZAの作品URL または cid を貼り付け">
+    <button id="fetch-go">＋ この日に取り込む</button>
+    <span class="fetch-status" id="fetch-status"></span>
+  </div>
 </header>
 <div class="grid">
 {cards}

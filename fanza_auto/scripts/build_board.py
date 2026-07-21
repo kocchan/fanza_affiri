@@ -88,17 +88,20 @@ def collect(cfg: dict) -> list:
         aff_url = item.get("affiliateURL") or ""
         if aff_url:
             aff_url = C.rewrite_aff_url(aff_url, cfg)
-            # ★bit.lyで短縮する。APIを毎回叩かないよう item.json にキャッシュし、
-            #   元URL（short_url_src）が変わったとき（af_id変更等）だけ作り直す。
-            if item.get("short_url") and item.get("short_url_src") == aff_url:
-                aff_url = item["short_url"]
-            else:
-                short = C.shorten_url(aff_url, cfg)
-                if short != aff_url:
-                    item["short_url"] = short
-                    item["short_url_src"] = aff_url
-                    C.write_item(d, item)
-                aff_url = short
+            # ★ユーザー方針（2026-07-20）：短縮せず元のフルURLを使う
+            #   （config.json の shorten_links）。短縮ONのときだけ bit.ly を使い、
+            #   APIを毎回叩かないよう item.json にキャッシュする（af_id変更等で
+            #   元URLが変わったときだけ作り直す）。
+            if cfg.get("shorten_links", False):
+                if item.get("short_url") and item.get("short_url_src") == aff_url:
+                    aff_url = item["short_url"]
+                else:
+                    short = C.shorten_url(aff_url, cfg)
+                    if short != aff_url:
+                        item["short_url"] = short
+                        item["short_url_src"] = aff_url
+                        C.write_item(d, item)
+                    aff_url = short
         avg, count = PT.review_of(item)
         entries.append({
             "dir": d,
