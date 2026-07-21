@@ -11,6 +11,9 @@
   3. ブラウザで開く
   4. ボードからの「✂ 切り抜く」（POST /__cut）を受けて cut_video.py を実行し、
      cut_<開始>-<終了>.mp4 を作品フォルダに保存して返す
+  5. 「📦 アーカイブ」「🗑 完全削除」「↩ 全体ボードに戻す」（POST /__archive・
+     /__unarchive・/__delete_work）も受け付ける（全体ボード側で使うボタンだが、
+     この共通Handlerを継承する serve_schedule.py からも同じ処理が呼ばれる）
 
 使い方（プロジェクトのルートフォルダで実行）:
     python3 fanza_auto/scripts/serve_board.py <cid> [ポート]
@@ -30,9 +33,12 @@ import socket
 import subprocess
 import sys
 import webbrowser
+from pathlib import Path
 
 import build_board as BB
+import check_missav as CM
 import common as C
+import schedule_board as SB
 
 ROOT = str(C.WORKS_DIR)
 CUT_PY = str(C.ROOT / "scripts" / "cut_video.py")
@@ -163,16 +169,70 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ── 動画の切り抜き（/__cut）・画面トリミング（/__crop）・削除（/__del）
     #    ・静止画切り抜き（/__grab）・採用画像から選ぶ（/__select_thumb）
-    #    ・画像トリミング（/__crop_image）─────────────────────
+    #    ・画像トリミング（/__crop_image）・アーカイブ（/__archive・/__unarchive・
+    #    /__delete_work）─────────────────────
     def do_POST(self):
         path = self.path.split("?")[0]
         if path not in ("/__cut", "/__crop", "/__del",
-                        "/__grab", "/__select_thumb", "/__crop_image"):
+                        "/__grab", "/__select_thumb", "/__crop_image",
+                        "/__missav", "/__archive", "/__unarchive", "/__delete_work"):
             return self.send_error(404, "not found")
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b"{}"
         try:
             req = json.loads(body or b"{}")
+
+            # 作品をアーカイブする／アーカイブから戻す（item.json の "archived" を更新）。
+            if path in ("/__archive", "/__unarchive"):
+                folder = self._safe_dir(req.get("dir"))
+                if not folder:
+                    return self._json(400, {"ok": False, "error": "dir が不正"})
+                folder = Path(folder)
+                item = C.read_item(folder)
+                item["archived"] = (path == "/__archive")
+                C.write_item(folder, item)
+                cid = C.cid_of(folder)
+                cfg = C.load_config(require_api=False)
+                try:
+                    BB.build_single(cid, cfg, regen=False)
+                except Exception as ex:
+                    print(f"  ! board_{cid} の再生成に失敗: {ex}")
+                SB.build_all(cfg)
+                verb = "アーカイブしました" if item["archived"] else "全体ボードに戻しました"
+                print(f"  📦 {req.get('dir')} を{verb}")
+                return self._json(200, {"ok": True})
+
+            # 作品フォルダごと完全に削除する（元に戻せない）。
+            if path == "/__delete_work":
+                folder = self._safe_dir(req.get("dir"))
+                if not folder:
+                    return self._json(400, {"ok": False, "error": "dir が不正"})
+                cid = C.cid_of(Path(folder))
+                shutil.rmtree(folder)
+                single_html = BB.single_board_path(cid)
+                if single_html.is_file():
+                    single_html.unlink()
+                cfg = C.load_config(require_api=False)
+                SB.build_all(cfg)
+                print(f"  🗑 完全削除: {req.get('dir')}")
+                return self._json(200, {"ok": True})
+
+            # MissAVに一致する動画が上がっていないかを確認する（Playwrightで実ブラウザ操作・
+            # 数秒かかる）。結果は item.json にキャッシュし、ボード/ダッシュボードを作り直す。
+            if path == "/__missav":
+                folder = self._safe_dir(req.get("dir"))
+                if not folder:
+                    return self._json(400, {"ok": False, "error": "dir が不正"})
+                try:
+                    missav = CM.check_and_cache(Path(folder))
+                except Exception as ex:
+                    return self._json(500, {"ok": False, "error": f"確認処理に失敗: {ex}"})
+                if missav.get("status") == "error":
+                    return self._json(502, {"ok": False,
+                                            "error": missav.get("error") or "確認に失敗しました"})
+                print(f"  🔎 MissAV確認: {req.get('dir')} → {missav['status']}")
+                self._rebuild_board(req.get("dir"))
+                return self._json(200, {"ok": True, "missav": missav})
 
             # 作った素材（cut_/crop_の動画、clip_/thumb_の画像）だけを削除する。
             # 元動画・採用画像・他ファイルは消せない。
@@ -339,14 +399,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json(500, {"ok": False, "error": str(ex)})
 
     def _rebuild_board(self, dir_rel):
-        """切り抜き/削除の直後に board_<cid>.html を作り直す。
+        """切り抜き/削除の直後に board_<cid>.html と全体ボード／アーカイブ一覧を作り直す。
         作り直さないと「消した/作った動画がリロードで元に戻る」ことになる
         （HTMLは静的ファイルで、生成時点のファイル一覧を固定で持つため）。
-
-        ★この作品が日付フォルダ（works/<YYYY-MM-DD>/）に入っている場合は、
-          serve_board.py 単体で使っていても（serve_schedule.py 経由でなくても）
-          その日のスケジュールダッシュボードを同期する。そうしないと
-          「個別ページでは反映されているのにダッシュボードには出ない」というズレが起きる。"""
+        単体（serve_board.py）で使っていても全体ボードが古いままにならないよう、
+        常に両方を同期する。"""
         work_dir = C.WORKS_DIR / (dir_rel or "")
         cfg = C.load_config(require_api=False)
         try:
@@ -354,13 +411,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             BB.build_single(cid, cfg, regen=False)
         except Exception as ex:
             print(f"  ! board_{dir_rel} の再生成に失敗: {ex}")
-        date = C.date_of(work_dir)
-        if date:
-            try:
-                import schedule_board as SB
-                SB.build_for_date(date, cfg)
-            except Exception as ex:
-                print(f"  ! {date} のダッシュボード再生成に失敗: {ex}")
+        try:
+            SB.build_all(cfg)
+        except Exception as ex:
+            print(f"  ! 全体ボードの再生成に失敗: {ex}")
 
 
 def main(argv) -> int:

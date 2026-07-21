@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-`works/<投稿予定日>/dashboard.html`（投稿スケジュール管理）を、動画・画像の
-切り抜き/作成/削除、URLを貼っての新規作品取り込みも使える状態で開くための
-小さなサーバー。
+`works/board.html`（全体ボード）を、動画・画像の切り抜き/作成/削除、アーカイブ操作、
+URLを貼っての新規作品取り込みも使える状態で開くための小さなサーバー。
 
 serve_board.py の Handler（配信＋/__cut・/__crop・/__del・/__grab・
-/__select_thumb・/__crop_image）をそのまま再利用し、
-  - 素材作成/削除の直後に該当日の dashboard.html を作り直すフック
-  - /__fetch（URL/cidを貼って新規作品を今の日付フォルダに取り込む）
-を追加する。
+/__select_thumb・/__crop_image・/__missav・/__archive・/__unarchive・/__delete_work）を
+そのまま再利用し、/__fetch（URL/cidを貼って新規作品を works/ 直下に取り込む）だけを追加する。
+取り込みが成功したら、そのままMissAVに一致する動画が上がっていないかも自動で確認する
+（手で「🔎 MissAVを確認」を押さなくても、取り込み直後からボード上に あり/なし が出る）。
+それ以外の操作の後始末（board.html/archive.html/board_<cid>.html の再生成）は
+serve_board.py の Handler 側が共通で行うので、ここで重ねて行う必要はない。
 
 使い方（プロジェクトのルートフォルダで実行）:
-    python3 fanza_auto/scripts/serve_schedule.py                    # 日付フォルダが1つならそれを開く
-    python3 fanza_auto/scripts/serve_schedule.py 2026-07-25         # 日付を指定
-    python3 fanza_auto/scripts/serve_schedule.py 2026-07-25 8001    # ポートも指定
+    python3 fanza_auto/scripts/serve_schedule.py           # works/board.html を開く
+    python3 fanza_auto/scripts/serve_schedule.py 8001      # ポートを指定
 
 止めるとき: Ctrl+C
 """
@@ -22,45 +22,28 @@ serve_board.py の Handler（配信＋/__cut・/__crop・/__del・/__grab・
 import functools
 import http.server
 import json
-import os
 import subprocess
 import sys
-import urllib.parse
 import webbrowser
 
 import build_board as BB
+import check_missav as CM
 import common as C
 import schedule_board as SB
 import serve_board as SVB
 
-ROOT = str(C.WORKS_DIR)
 FETCH_PY = str(C.ROOT / "scripts" / "fetch_and_build.py")
-
-# サーバー起動時に決まる「今のダッシュボードの日付」。/__fetch はここに取り込む。
-TARGET_DATE = None
 
 
 class Handler(SVB.Handler):
     def do_POST(self):
         path = self.path.split("?")[0]
-
         if path == "/__fetch":
             return self._handle_fetch()
-
-        result = super().do_POST()
-        # 動画の切り抜き/画面トリミング/削除、画像の切り抜き/選択/トリミングの直後は、
-        # dashboard.html を作り直しておく（存在する日付ぶん全部）。作り直さないと
-        # 「消した/作ったはずの素材がリロードで元に戻る」＝静的HTMLが古い一覧のままになる。
-        if path in ("/__cut", "/__crop", "/__del",
-                    "/__grab", "/__select_thumb", "/__crop_image"):
-            try:
-                SB.main(["schedule_board.py"])
-            except Exception as ex:
-                print(f"  ! dashboard.html の再生成に失敗: {ex}")
-        return result
+        return super().do_POST()
 
     def _handle_fetch(self):
-        """URL/cid を貼って新規作品を TARGET_DATE の日付フォルダに取り込む。
+        """URL/cid を貼って新規作品を works/ 直下に取り込む。
         fetch_and_build.py をサブプロセスで呼ぶ（nudenetの重い読み込みを
         このサーバー本体に持ち込まないため・処理中の詳細ログも取れるため）。"""
         length = int(self.headers.get("Content-Length", 0))
@@ -74,7 +57,7 @@ class Handler(SVB.Handler):
             cfg = C.load_config(require_api=False)
             before = {e["cid"] for e in BB.collect(cfg)}
 
-            cmd = [sys.executable, FETCH_PY, token, f"--date={TARGET_DATE}"]
+            cmd = [sys.executable, FETCH_PY, token]
             print(f"  ⬇ 取り込み開始: {token}")
             r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, timeout=300)
@@ -92,51 +75,36 @@ class Handler(SVB.Handler):
                                         "log": log_tail})
 
             cid = next(iter(new_cids))
-            BB.build_single(cid, cfg, regen=False)
-            SB.build_for_date(TARGET_DATE, cfg)
             entry = next(e for e in after_entries if e["cid"] == cid)
-            print(f"  ✓ 取り込み完了: {cid}（{entry['title']}）")
-            return self._json(200, {"ok": True, "cid": cid, "title": entry["title"]})
+
+            # 取り込みをトリガに、そのままMissAVに一致する動画が上がっていないか確認する
+            # （手でボタンを押さなくても最初から結果が見える。数秒かかる）。
+            missav = None
+            try:
+                missav = CM.check_and_cache(entry["dir"])
+            except Exception as ex:
+                print(f"  ! MissAV確認に失敗: {ex}")
+
+            BB.build_single(cid, cfg, regen=False)
+            SB.build_all(cfg)
+            print(f"  ✓ 取り込み完了: {cid}（{entry['title']}）"
+                  + (f" ／MissAV: {missav['status']}" if missav else ""))
+            return self._json(200, {"ok": True, "cid": cid, "title": entry["title"],
+                                    "missav": missav})
         except subprocess.TimeoutExpired:
             return self._json(500, {"ok": False, "error": "処理がタイムアウトしました（5分）"})
         except Exception as ex:
             return self._json(500, {"ok": False, "error": str(ex)})
 
 
-def resolve_date(argv) -> str:
-    """引数から対象日付を決める。省略時は日付フォルダが1つだけならそれを使う。"""
-    positional = [a for a in argv[1:] if not a.isdigit()]
-    if positional:
-        date = positional[0]
-        if not C.DATE_RE.match(date):
-            sys.exit(f"✗ 日付は YYYY-MM-DD の形式で指定してください: {date}")
-        return date
-
-    dates = C.date_dirs()
-    if not dates:
-        sys.exit("✗ works/ に日付フォルダがありません。"
-                 "先に fetch_and_build.py で作品を取り込んでください。")
-    if len(dates) > 1:
-        names = ", ".join(d.name for d in dates)
-        sys.exit(f"✗ 日付フォルダが複数あります。指定してください: {names}\n"
-                 f"  例) python3 fanza_auto/scripts/serve_schedule.py {dates[0].name}")
-    return dates[0].name
-
-
 def main(argv) -> int:
-    global TARGET_DATE
-    date = resolve_date(argv)
-    TARGET_DATE = date
     port_args = [a for a in argv[1:] if a.isdigit()]
     port = int(port_args[0]) if port_args else 8000
 
     cfg = C.load_config(require_api=False)
-    out = SB.build_for_date(date, cfg)
+    out = SB.build_all(cfg)
 
-    # 日付フォルダ名はASCIIだが、将来日本語混在も考えて念のためエンコードする。
-    rel = os.path.relpath(out, C.WORKS_DIR)
-    url_path = "/".join(urllib.parse.quote(seg) for seg in rel.split(os.sep))
-    url = f"http://127.0.0.1:{port}/{url_path}"
+    url = f"http://127.0.0.1:{port}/{out.name}"
 
     handler = functools.partial(Handler)
     try:
@@ -147,8 +115,8 @@ def main(argv) -> int:
         return 1
 
     print(f"\n▶ 開く: {url}")
-    print(f"  スマホ等からは: http://{SVB.lan_ip()}:{port}/{url_path}")
-    print("  ここで動画の切り抜き・削除が使えます。")
+    print(f"  スマホ等からは: http://{SVB.lan_ip()}:{port}/{out.name}")
+    print("  ここで動画の切り抜き・アーカイブ・URL取り込みが使えます。")
     print("  止めるとき: Ctrl+C\n")
     webbrowser.open(url)
     try:

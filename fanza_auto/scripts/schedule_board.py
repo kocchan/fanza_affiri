@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-`works/<投稿予定日>/`（例：works/2026-07-25/）に集めた作品を、まとめて確認・投稿作業する
-ためのダッシュボード（`works/<日付>/dashboard.html`）を作る。
-
-★ユーザー方針（2026-07-20）：「進行中」という固定フォルダではなく、投稿予定日ごとの
-フォルダで管理する。fetch_and_build.py が取り込み時に日付を聞いて works/<日付>/ に置く。
+`works/` に集めた全作品を、まとめて確認・投稿作業するための全体ボード（`works/board.html`）と、
+アーカイブした作品の一覧（`works/archive.html`）を作る。
 
 各作品カードには：
-  - タイトル・★評価
+  - タイトル・★評価・MissAV確認バッジ
   - 作った切り抜き（cut_*.mp4 / crop_*.mp4）の一覧＋⬇保存・🗑削除
   - ①サブ投稿・②メイン投稿・アフィリンクのコピー
-  - 「投稿済みにする」トグル（ブラウザのlocalStorageに保存・サーバー不要）
   - 個別ボード（board_<cid>.html）へのリンク（動画の再生・切り抜き・画面トリミングはそちら）
+  - board.html側：「📦 アーカイブ」ボタン（押すとカードが消え、archive.html に移る）
+  - archive.html側：「🗑 完全削除」（フォルダごと消す）「↩ 全体ボードに戻す」の2ボタン
+
+アーカイブ状態は各作品の item.json の "archived" に保存する（ブラウザのlocalStorageではなく
+サーバー側で永続化。実際の更新は serve_board.py / serve_schedule.py の
+/__archive・/__unarchive・/__delete_work が行う）。
 
 使い方（プロジェクトのルートフォルダで実行）:
-    python3 fanza_auto/scripts/schedule_board.py                 # 全日付ぶんの dashboard.html を作る
-    python3 fanza_auto/scripts/schedule_board.py 2026-07-25       # その日付だけ作る
-    python3 fanza_auto/scripts/schedule_board.py 2026-07-25 --open
+    python3 fanza_auto/scripts/schedule_board.py            # board.html・archive.html を作る
+    python3 fanza_auto/scripts/schedule_board.py --open     # 作ってそのまま board.html を開く
 """
 
 import datetime
@@ -30,8 +31,12 @@ import build_board as BB
 import post_text as PT
 
 
-def dashboard_path(date: str):
-    return C.WORKS_DIR / date / "dashboard.html"
+def board_path():
+    return C.WORKS_DIR / "board.html"
+
+
+def archive_path():
+    return C.WORKS_DIR / "archive.html"
 
 
 def esc(s) -> str:
@@ -50,7 +55,9 @@ body{margin:0;padding:0 16px 64px;background:var(--bg);color:var(--fg);
  line-height:1.7;-webkit-text-size-adjust:100%}
 .wrap{max-width:1400px;margin:0 auto}
 header{padding:28px 0 16px}
+.hdr-row{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
 h1{font-size:1.5rem;margin:0 0 6px}
+.hdr-link{font-size:.85rem;font-weight:600}
 .lead{color:var(--sub);margin:0 0 4px;font-size:.9rem}
 /* 横一列＋スナップスクロール：カード3枚分くらいが見える幅で並べ、指/トラックパッドで
    スーッとスクロールできるようにする（スマホのフリックにも対応）。 */
@@ -60,25 +67,59 @@ h1{font-size:1.5rem;margin:0 0 6px}
 .grid::-webkit-scrollbar-thumb{background:var(--line);border-radius:999px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;
  display:flex;flex-direction:column;gap:10px;
- flex:0 0 clamp(280px,31vw,380px);scroll-snap-align:start}
-.card.done{opacity:.55}
-.card h2{font-size:1.02rem;margin:0;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+ flex:0 0 clamp(280px,31vw,380px);min-width:0;scroll-snap-align:start}
+.card h2{font-size:1.02rem;margin:0}
+.card h2 .title-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+ overflow:hidden;line-height:1.3;min-height:2.6em}
+.card-sub{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;
+ gap:6px 10px;margin:0;font-size:.78rem}
 .cid{font-size:.72rem;color:var(--sub);font-weight:400}
 .meta{font-size:.82rem;color:var(--sub);margin:0}
-video{width:100%;max-height:280px;background:#000;border-radius:8px;display:block}
 .notice{background:var(--warnbg);color:var(--warn);border-radius:8px;padding:8px 10px;
  font-size:.78rem;margin:0}
 button{border:1px solid var(--line);background:var(--card);color:var(--fg);
  border-radius:7px;padding:6px 12px;font-size:.82rem;cursor:pointer;font-family:inherit}
 button:hover{border-color:var(--accent);color:var(--accent)}
 button.copied{background:var(--okbg);color:var(--ok);border-color:transparent}
+button.delete-btn:hover{border-color:#dc2626;color:#dc2626}
 .clips{display:flex;flex-direction:column;gap:8px}
-.clip{border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg)}
-.clip video{max-height:180px;margin-bottom:6px}
-.thumbgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.clip{border:1px solid var(--line);border-radius:8px;padding:0 0 8px;background:var(--bg);
+ overflow:hidden}
+/* 動画は本来の縦横比のまま、ボックス幅いっぱいに表示する（クロップしない）。
+   高さは動画ごとの比率任せなので、縦長・横長が混ざるとカードの高さは揃わない
+   （揃えるためにクロップする方を避けるため、これは許容する）。 */
+.clip video{width:100%;height:auto;display:block;background:#000;margin-bottom:6px}
+.clip .clip-h{padding:0 8px}
+/* 複数カットあるときは1本だけ全幅で表示し、左右の矢印（ホバーで表示）で
+   切り替えるカルーセルにする（1本の時と同じ「ボックス幅いっぱい」を維持するため）。 */
+.clip-carousel{position:relative}
+.clip-carousel .clip{display:none}
+.clip-carousel .clip.active{display:block}
+.car-nav{position:absolute;top:0;bottom:26px;width:34px;display:flex;align-items:center;
+ justify-content:center;background:none;border:none;color:#fff;font-size:1.3rem;
+ cursor:pointer;opacity:0;transition:opacity .15s;z-index:2;padding:0}
+.car-nav:hover{color:#fff;background:rgba(0,0,0,.25)}
+.car-prev{left:0}
+.car-next{right:0}
+.clip-carousel:hover .car-nav{opacity:1}
+.car-count{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.55);color:#fff;
+ font-size:.68rem;padding:1px 7px;border-radius:999px;z-index:2;pointer-events:none}
+.thumbgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;
+ min-width:0}
+.thumbgrid>*{min-width:0}
 .clip.thumb img{width:100%;height:auto;display:block;border-radius:6px;margin-bottom:6px}
+/* 動画・サムネがまだ無い時のプレースホルダー。実物と同じくらいの高さになるよう、
+   固定pxではなく実物でよくある比率（動画16:9・サムネ4:3）で高さを決める
+   （ボックス幅いっぱいに広がるので、幅が変わっても比率で高さが追従する）。 */
+.empty-slot{display:flex;flex-direction:column;align-items:center;justify-content:center;
+ gap:4px;text-align:center;border:1.5px dashed var(--line);border-radius:6px;
+ color:var(--sub);font-size:.78rem;text-decoration:none;padding:8px;box-sizing:border-box;
+ aspect-ratio:16/9;background:var(--card)}
+.empty-slot:hover{border-color:var(--accent);color:var(--accent)}
+.clip .empty-slot{margin:0 8px 6px;width:calc(100% - 16px)}
+.empty-slot.thumb{aspect-ratio:4/3;margin-bottom:6px}
 .clip-h{display:flex;justify-content:space-between;align-items:center;gap:8px;
- font-size:.76rem;margin-bottom:4px}
+ font-size:.76rem;margin-bottom:4px;min-height:31px}
 .clip-h>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .clip-act{display:flex;gap:6px;flex-shrink:0}
 .dl{display:inline-block;border:1px solid var(--line);border-radius:7px;padding:4px 10px;
@@ -95,7 +136,13 @@ pre{margin:0;padding:10px;background:var(--bg);border:1px solid var(--line);
 pre.link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.7rem;color:var(--sub)}
 .foot{display:flex;justify-content:space-between;align-items:center;gap:8px;
  border-top:1px solid var(--line);padding-top:10px;flex-wrap:wrap}
-a.open{font-size:.82rem;font-weight:600}
+.archive-actions{display:flex;gap:8px}
+a.open{display:inline-block;font-size:.8rem;font-weight:600;text-decoration:none;
+ color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px 12px;
+ background:var(--card)}
+a.open:hover{border-color:var(--accent);color:var(--accent)}
+button.archive-btn{border-color:#dc2626;color:#dc2626}
+button.archive-btn:hover{background:#dc2626;color:#fff}
 .empty{text-align:center;color:var(--sub);padding:40px 0}
 .badge{font-size:.72rem;padding:2px 9px;border-radius:999px;background:var(--okbg);color:var(--ok);
  font-weight:600}
@@ -109,6 +156,11 @@ a.open{font-size:.82rem;font-weight:600}
 .fetch-status{font-size:.82rem;color:var(--sub)}
 .fetch-status.ok{color:var(--ok)}
 .fetch-status.err{color:var(--accent)}
+.missav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.78rem}
+.missav-badge{padding:2px 9px;border-radius:999px;font-weight:600}
+.missav-badge.found{background:var(--warnbg);color:var(--warn)}
+.missav-badge.clear{background:var(--okbg);color:var(--ok)}
+.missav-note{color:var(--sub);font-size:.72rem}
 """
 
 JS = """
@@ -133,19 +185,59 @@ document.addEventListener('click',e=>{
   if(el)copyText(el.textContent,b);
 });
 
-// 投稿済みチェック（ローカル保存）
-const DONE='fanza_schedule_done';
-const done=new Set(JSON.parse(localStorage.getItem(DONE)||'[]'));
-function paint(){document.querySelectorAll('.card').forEach(c=>{
-  const on=done.has(c.dataset.cid);c.classList.toggle('done',on);
-  const b=c.querySelector('button[data-done]');
-  if(b)b.textContent=on?'✓ 投稿済み':'投稿済みにする';});}
+// 複数カットのカルーセル：常に1本だけ全幅で表示し、左右の矢印（ホバーで表示）
+// またはクリックで前/次に切り替える。切り替えたら隠れた側の動画は一時停止する。
+function showClip(carousel,idx){
+  const clips=carousel.querySelectorAll(':scope > .clip');
+  const n=clips.length;
+  const next=((idx%n)+n)%n;
+  clips.forEach((c,i)=>{
+    const on=i===next;
+    c.classList.toggle('active',on);
+    if(!on){const v=c.querySelector('video');if(v)v.pause();}
+  });
+  carousel.dataset.idx=next;
+  const cnt=carousel.querySelector('.car-count');
+  if(cnt)cnt.textContent=(next+1)+' / '+n;
+}
 document.addEventListener('click',e=>{
-  const b=e.target.closest('button[data-done]');if(!b)return;
-  const cid=b.closest('.card').dataset.cid;
-  done.has(cid)?done.delete(cid):done.add(cid);
-  localStorage.setItem(DONE,JSON.stringify([...done]));paint();});
-paint();
+  const b=e.target.closest('.car-nav');if(!b)return;
+  e.preventDefault();
+  const carousel=b.closest('.clip-carousel');
+  const idx=parseInt(carousel.dataset.idx||'0',10);
+  showClip(carousel,idx+(b.classList.contains('car-next')?1:-1));
+});
+
+// アーカイブ操作（📦アーカイブ／🗑完全削除／↩全体ボードに戻す）。
+// board.html・archive.html・board_<cid>.html のどのページから叩いても
+// serve_board.py / serve_schedule.py 側の共通Handlerが処理する。
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('.archive-btn,.unarchive-btn,.delete-btn');
+  if(!b)return;
+  if(location.protocol==='file:'){
+    alert('この操作は serve_schedule.py 経由でのみ動きます。');return;}
+  const dir=b.dataset.dir;
+  const card=b.closest('.card');
+  let url,label;
+  if(b.classList.contains('archive-btn')){url='/__archive';label='アーカイブ中…';}
+  else if(b.classList.contains('unarchive-btn')){url='/__unarchive';label='戻し中…';}
+  else{
+    if(!confirm('完全に削除します。元に戻せません。よろしいですか？'))return;
+    url='/__delete_work';label='削除中…';
+  }
+  const old=b.textContent;b.textContent=label;
+  const sibling=b.parentElement?b.parentElement.querySelectorAll('button'):[];
+  sibling.forEach(x=>x.disabled=true);
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({dir})});
+    const j=await r.json();
+    if(!j.ok){alert('失敗: '+(j.error||'不明なエラー'));b.textContent=old;
+      sibling.forEach(x=>x.disabled=false);return;}
+    if(card)card.remove();
+  }catch(ex){alert('通信に失敗しました: '+ex);b.textContent=old;
+    sibling.forEach(x=>x.disabled=false);}
+});
 
 // 切り抜き素材の削除（serve_schedule.py が /__del を中継）
 document.addEventListener('click',async e=>{
@@ -164,7 +256,7 @@ document.addEventListener('click',async e=>{
   }catch(ex){alert('通信に失敗しました: '+ex);b.textContent=old;b.disabled=false;}
 });
 
-// URLを貼って新規作品をこの日付に取り込む
+// URLを貼って新規作品を取り込む
 document.addEventListener('click',async e=>{
   const b=e.target.closest('#fetch-go');if(!b)return;
   const input=document.getElementById('fetch-url');
@@ -186,7 +278,7 @@ document.addEventListener('click',async e=>{
       b.textContent=old;b.disabled=false;input.disabled=false;
     }else{
       status.className='fetch-status ok';status.textContent=`✓ 取り込みました: ${j.title}（反映中…）`;
-      location.reload();   // 新しいカードを含む最新の dashboard.html を読み直す
+      location.reload();   // 新しいカードを含む最新の board.html を読み直す
     }
   }catch(ex){
     status.className='fetch-status err';status.textContent='通信に失敗しました: '+ex;
@@ -195,6 +287,30 @@ document.addEventListener('click',async e=>{
 });
 document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target.id==='fetch-url')document.getElementById('fetch-go').click();
+});
+
+// MissAV確認（品番が一致する動画が上がっていないか）。Playwrightで実ブラウザを動かすため
+// 数秒かかる。結果は item.json にキャッシュされ、次回はキャッシュした結果を表示する。
+function missavBadge(m){
+  if(m.status==='found')return '<span class="missav-badge found">⚠️ MissAVにあり</span>';
+  if(m.status==='not_found')return '<span class="missav-badge clear">✓ MissAVになし</span>';
+  return '';
+}
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('.missav-btn');if(!b)return;
+  const dir=b.dataset.dir, box=document.getElementById(b.dataset.target);
+  if(location.protocol==='file:'){alert('MissAV確認は serve_schedule.py 経由でのみ動きます。');return;}
+  const old=b.textContent;b.textContent='確認中…（数秒）';b.disabled=true;
+  try{
+    const r=await fetch('/__missav',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({dir})});
+    const j=await r.json();
+    if(!j.ok){alert('確認に失敗: '+(j.error||'不明なエラー'));b.textContent=old;b.disabled=false;return;}
+    const m=j.missav||{};
+    const note=m.checked_at?`<span class="missav-note">確認 ${m.checked_at}</span>`:'';
+    box.innerHTML=missavBadge(m)+note+
+      ` <button class="missav-btn" data-dir="${dir}" data-target="${box.id}">再確認</button>`;
+  }catch(ex){alert('通信に失敗しました: '+ex);b.textContent=old;b.disabled=false;}
 });
 """
 
@@ -208,38 +324,47 @@ def copy_block(label: str, text: str, elid: str, extra_cls: str = "") -> str:
       </div>"""
 
 
-def render_card(e: dict, post: dict, date_dir) -> str:
+def render_card(e: dict, post: dict, archived: bool) -> str:
     cid = e["cid"]
-    # dashboard.html は works/<日付>/ 直下にあるので、<video src> 等の相対リンクは
-    # そこからの相対パス（dir_name）にする。BB.rel_dir は works/ 直下基準なので、
-    # そのまま使うと「<日付>/」が二重に付いて 404 になる。
-    # 一方 /__del API（serve_schedule.py→_safe_dir）は works/ 直下基準のパスを
-    # 期待するので、そちらは api_dir（BB.rel_dir）を別に使う。
-    dir_name = e["dir"].relative_to(date_dir).as_posix()
-    api_dir = BB.rel_dir(e["dir"])
+    # board.html / archive.html は works/ 直下にあるので、<video src> 等の相対リンクと
+    # /__del 等API向けのパス（BB.rel_dir、works/直下基準）は同じ値になる。
+    dir_name = BB.rel_dir(e["dir"])
+    board_url = f"board_{urllib.parse.quote(cid)}.html"
 
-    bits = []
-    if e["review_avg"] is not None:
-        bits.append(f"★{e['review_avg']:.2f}（{e['review_count']}件）")
-    meta = f'<p class="meta">{" / ".join(bits)}</p>' if bits else ""
+    # ★ユーザー方針（2026-07-22）：全体ボードでは★評価を表示しない
+    #   （並び順はこれまで通りレビューの良い順を維持。表示だけ外す）。
 
-    # ★ユーザー方針（2026-07-20）：このダッシュボードには元のサンプル動画は出さず、
+    # ★ユーザー方針（2026-07-20）：このボードには元のサンプル動画は出さず、
     #   「カットした動画（cut_/crop_）」だけを載せる。編集前の元動画を見たいときは
     #   個別ページ（board_<cid>.html）を開く。
+    n_clips = len(e["clips"])
     clips_html = ""
-    for f in e["clips"]:
+    for i, f in enumerate(e["clips"]):
         csrc = BB.rel_media(dir_name, f)
         icon = "🔲" if f.startswith("crop_") else "✂"
+        active = " active" if i == 0 else ""
         clips_html += (
-            f'<div class="clip"><video controls preload="metadata" src="{csrc}"></video>'
+            f'<div class="clip{active}"><video controls preload="metadata" src="{csrc}"></video>'
             f'<div class="clip-h"><span>{icon} {esc(f)}</span>'
             f'<span class="clip-act">'
             f'<a class="dl" href="{csrc}" download="{esc(f)}">⬇ 保存</a>'
             f'<button class="del" data-file="{esc(f)}" '
-            f'data-dir="{esc(api_dir)}">🗑 削除</button></span></div></div>')
-    clips_block = (f'<div class="clips">{clips_html}</div>' if clips_html else
-                   '<p class="notice">まだカットされた動画がありません。'
-                   '個別ページで動画を切り抜くとここに表示されます。</p>')
+            f'data-dir="{esc(dir_name)}">🗑 削除</button></span></div></div>')
+    if n_clips >= 2:
+        # 複数カットは常にボックス幅いっぱいで1本ずつ表示し、左右の矢印
+        # （ホバーで表示）で切り替えるカルーセルにする。
+        clips_block = (
+            f'<div class="clip-carousel" data-idx="0">{clips_html}'
+            '<button class="car-nav car-prev" aria-label="前の動画">‹</button>'
+            '<button class="car-nav car-next" aria-label="次の動画">›</button>'
+            f'<span class="car-count">1 / {n_clips}</span></div>')
+    elif clips_html:
+        clips_block = clips_html
+    else:
+        clips_block = ('<div class="clip empty-clip">'
+                       f'<a class="empty-slot" href="{board_url}" target="_blank" rel="noopener">'
+                       'まだ動画がありません<br>＋ 作成する →</a>'
+                       '<div class="clip-h">&nbsp;</div></div>')
 
     # 完成したサムネ画像（thumb_*.jpg）も、ここから保存・削除できるようにする。
     thumbs_html = ""
@@ -252,76 +377,96 @@ def render_card(e: dict, post: dict, date_dir) -> str:
             f'<span class="clip-act">'
             f'<a class="dl" href="{tsrc}" download="{esc(f)}">⬇ 保存</a>'
             f'<button class="del" data-file="{esc(f)}" '
-            f'data-dir="{esc(api_dir)}">🗑 削除</button></span></div></div>')
+            f'data-dir="{esc(dir_name)}">🗑 削除</button></span></div></div>')
     thumbs_block = (f'<div class="clips thumbgrid">{thumbs_html}</div>' if thumbs_html else
-                   '<p class="notice">まだサムネ画像がありません。'
-                   '個別ページで作るとここに表示されます。</p>')
+                   f'<div class="clips thumbgrid"><a class="empty-slot thumb" href="{board_url}" '
+                   f'target="_blank" rel="noopener">まだサムネがありません<br>'
+                   f'＋ 作成する →</a></div>')
 
-    # ★ユーザー方針（2026-07-20）：未成年連想ジャンルのオンページ警告・
-    #   投稿日時/アカウント/メモの入力フォームは不要（画像は毎回目視確認済み、
-    #   スケジュールは「投稿済みにする」トグル1つで十分とのこと）。
-    #   caution_genres() 自体は削除せず、生成時のターミナルログにだけ残す。
+    # ★ユーザー方針（2026-07-20）：未成年連想ジャンルのオンページ警告は不要
+    #   （画像は毎回目視確認済み）。caution_genres() 自体は削除せず、
+    #   生成時のターミナルログにだけ残す。
     cautions = PT.caution_genres(e["item"])
     if cautions:
         print(f"  ⚠️ {cid}: {'・'.join(cautions)} のジャンル付き。"
               "画像は未成年に見えないか目視で確認してください。")
 
-    board_url = f"../board_{urllib.parse.quote(cid)}.html"
+    board_url = f"board_{urllib.parse.quote(cid)}.html"
     uid = cid.replace(".", "_")
 
     # ★ユーザー方針（2026-07-20）：ここでもアフィリンク・投稿文をコピーできるように
-    # （個別ページを開かなくても、このダッシュボードだけで投稿作業を完結できる）。
+    # （個別ページを開かなくても、このボードだけで投稿作業を完結できる）。
     copy_blocks = (
-        copy_block("① サブ投稿（リンクを持たせる側）", post.get("sub", ""), f"sub-{uid}")
-        + copy_block("② メイン投稿（①を引用して出す）", post.get("main", ""), f"main-{uid}")
-        + (copy_block("アフィリエイトリンク（単体）", e["aff_url"], f"aff-{uid}", "link")
-           if e["aff_url"] else "")
+        copy_block("リンク投稿（アフィリンクを持たせる側）", post.get("sub", ""), f"sub-{uid}")
+        + copy_block("メイン投稿（リンク投稿を引用して出す）", post.get("main", ""), f"main-{uid}")
     )
 
+    missav_html = C.missav_block_html(e["item"], dir_name, uid)
+    archive_html = C.archive_block_html(dir_name, archived)
+
     return f"""    <article class="card" data-cid="{esc(cid)}">
-      <h2>{esc(e['title'])}<span class="cid">{esc(cid)}</span></h2>
-      {meta}
+      <h2><span class="title-text">{esc(e['title'])}</span></h2>
+      <p class="card-sub"><span class="cid">{esc(cid)}</span>
+        <a class="open" href="{board_url}" target="_blank" rel="noopener">🎬 動画・画像を編集する →</a></p>
+      {missav_html}
       {clips_block}
       {thumbs_block}
       {copy_blocks}
       <div class="foot">
-        <a class="open" href="{board_url}" target="_blank" rel="noopener">📄 個別ページを開く（投稿文コピー・詳細編集）→</a>
-        <button data-done="1">投稿済みにする</button>
+        {archive_html}
       </div>
     </article>"""
 
 
-def render(date: str, entries: list, posts: dict, date_dir) -> str:
+def render(entries: list, posts: dict, archived: bool, other_count: int) -> str:
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     cards = "\n".join(
-        render_card(e, posts.get(e["cid"], {}), date_dir)
+        render_card(e, posts.get(e["cid"], {}), archived)
         for e in entries)
+
+    if archived:
+        title = "アーカイブ一覧"
+        lead = ("アーカイブした作品の一覧。「🗑 完全削除」でフォルダごと消去、"
+                "「↩ 全体ボードに戻す」で全体ボードに戻せます。")
+        nav = f'<a class="hdr-link" href="board.html">← 全体ボードに戻る（{other_count}件）</a>'
+        empty_msg = "アーカイブされた作品はありません。"
+        fetchbar = ""
+    else:
+        title = "全体ボード"
+        lead = ("投稿に使う作品をまとめて確認・コピー作業する。"
+                "詳しい画像/動画編集は各作品の個別ページで行う。")
+        nav = f'<a class="hdr-link" href="archive.html">🗄 アーカイブ一覧（{other_count}件）→</a>'
+        empty_msg = "works/ に作品がありません。"
+        fetchbar = """  <div class="fetchbar">
+    <input type="text" id="fetch-url" placeholder="FANZAの作品URL または cid を貼り付け">
+    <button id="fetch-go">＋ 取り込む</button>
+    <span class="fetch-status" id="fetch-status"></span>
+  </div>
+"""
+
     return f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{esc(date)} の投稿スケジュール</title>
+<title>{esc(title)}｜FANZA</title>
 <style>{CSS}</style>
 </head>
 <body>
 <div class="wrap">
 <header>
-  <h1>{esc(date)} の投稿 <span class="badge">{len(entries)}件</span></h1>
-  <p class="lead">この日に投稿する作品をまとめて確認・コピー作業する。
-     詳しい画像/動画編集は各作品の個別ページで行う。</p>
-  <p class="lead">更新 {now}</p>
-  <div class="fetchbar">
-    <input type="text" id="fetch-url" placeholder="FANZAの作品URL または cid を貼り付け">
-    <button id="fetch-go">＋ この日に取り込む</button>
-    <span class="fetch-status" id="fetch-status"></span>
+  <div class="hdr-row">
+    <h1>{esc(title)} <span class="badge">{len(entries)}件</span></h1>
+    {nav}
   </div>
-</header>
+  <p class="lead">{lead}</p>
+  <p class="lead">更新 {now}</p>
+{fetchbar}</header>
 <div class="grid">
 {cards}
 </div>
 <p class="empty" style="display:{'block' if not entries else 'none'}">
-   works/{esc(date)}/ に作品がありません。</p>
+   {esc(empty_msg)}</p>
 </div>
 <script>{JS}</script>
 </body>
@@ -329,47 +474,36 @@ def render(date: str, entries: list, posts: dict, date_dir) -> str:
 """
 
 
-def build_for_date(date: str, cfg: dict):
-    """指定した日付フォルダ（works/<date>/）ぶんの dashboard.html を作る。
-    対象作品が無くても空のダッシュボードを作る（後で作品を足せるように）。"""
-    date_dir = C.WORKS_DIR / date
-    entries = [e for e in BB.collect(cfg) if date_dir in e["dir"].parents]
-    entries.sort(key=BB.sort_key)
+def build_all(cfg: dict):
+    """works/board.html（未アーカイブ）と works/archive.html（アーカイブ済み）の
+    両方を作り直す。件数バッジを常に正しく保つため、呼ぶたびに両方書き出す。"""
+    entries = BB.collect(cfg)
+    active = [e for e in entries if not e["item"].get("archived")]
+    archived = [e for e in entries if e["item"].get("archived")]
+    active.sort(key=BB.sort_key)
+    archived.sort(key=BB.sort_key)
 
     posts = BB.ensure_posts(entries, regen=False)
-    date_dir.mkdir(parents=True, exist_ok=True)
-    out = dashboard_path(date)
-    out.write_text(render(date, entries, posts, date_dir), encoding="utf-8")
-    print(f"✓ {date} のダッシュボードを作りました: {out}（{len(entries)} 作品）")
-    return out
+
+    board_path().write_text(
+        render(active, posts, archived=False, other_count=len(archived)), encoding="utf-8")
+    archive_path().write_text(
+        render(archived, posts, archived=True, other_count=len(active)), encoding="utf-8")
+    print(f"✓ 全体ボードを作りました: {board_path()}"
+          f"（{len(active)} 作品／アーカイブ {len(archived)} 作品）")
+    return board_path()
 
 
 def main(argv) -> int:
     cfg = C.load_config(require_api=False)
     flags = set(a for a in argv[1:] if a.startswith("--"))
-    positional = [a for a in argv[1:] if not a.startswith("--")]
-
-    if positional:
-        date = positional[0]
-        if not C.DATE_RE.match(date):
-            print(f"✗ 日付は YYYY-MM-DD の形式で指定してください: {date}")
-            return 1
-        out = build_for_date(date, cfg)
-        if "--open" in flags:
-            import subprocess
-            subprocess.run(["open", str(out)], check=False)
-        return 0
-
-    # 日付指定が無ければ、存在する日付フォルダぶん全部を作り直す。
-    dates = C.date_dirs()
-    if not dates:
-        print("works/ に日付フォルダ（YYYY-MM-DD）がありません。"
-              "先に fetch_and_build.py で作品を取り込んでください。")
-        return 1
-    for d in dates:
-        build_for_date(d.name, cfg)
-    print("  切り抜き・削除を使うには: "
-          "python3 fanza_auto/scripts/serve_schedule.py <日付>")
+    out = build_all(cfg)
+    if "--open" in flags:
+        import subprocess
+        subprocess.run(["open", str(out)], check=False)
+    else:
+        print("  切り抜き・アーカイブ・URL取り込みを使うには: "
+              "python3 fanza_auto/scripts/serve_schedule.py")
     return 0
 
 

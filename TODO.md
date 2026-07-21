@@ -33,6 +33,28 @@
 
 ## ✅ 完了
 
+- [x] **投稿ボードを日付フォルダ方式から全体ボード＋アーカイブ方式に戻す**
+  「日付ごとのボード」をやめ、`works/board.html`（全作品）＋`works/archive.html`（アーカイブ済み）の
+  2枚構成に統合。もともとSKILL.md/README.mdは「日付フォルダは作らない」設計のままで、
+  2026-07-20頃に入った日付フォルダ化（`schedule_board.py`）だけがドキュメントより先行していたため、
+  今回はその巻き戻しにあたる。`fetch_and_build.py`も日付プロンプト（`prompt_post_date`・`--date=`）を廃止し
+  `works/<cid>_名前/`に直接保存する方式へ復帰。既存12+1作品は`works/`直下へ移動してフラット化
+  （`common.py`の`date_dirs`/`date_of`等も削除）。「投稿済みにする」（localStorageで薄く塗りつぶすだけ）を
+  廃止し、「📦アーカイブ」ボタン（`item.json`の`archived`にサーバー側で永続化・押すとカードが消える）に置換。
+  アーカイブ一覧側には「🗑完全削除」（フォルダごと`shutil.rmtree`・元に戻せない）と
+  「↩全体ボードに戻す」の2ボタン。エンドポイント`/__archive`・`/__unarchive`・`/__delete_work`は
+  `serve_board.py`の共通Handlerに追加（`board_<cid>.html`個別ページにも同じアーカイブボタンを設置し一貫性を保つ）。
+  `schedule_board.py`・`serve_schedule.py`を全面書き換え、`fanza_auto/README.md`・ルート`README.md`・
+  `.claude/skills/fanza-content/SKILL.md`も同期。ダミーフォルダでarchive/unarchive/完全削除の
+  エンドポイントを実地テスト済み。
+- [x] **MissAV存在チェック機能（品番の流出確認）**
+  品番からMissAV（https://missav.live/ja/search/<品番>）に一致する動画が上がっているかを内部確認する機能を追加。
+  `check_missav.py`（Playwrightで実ブラウザを操作。requestsだとCloudflareのJS認証で403になるため）。
+  完全一致時はサーバーが即描画・一致なし時はJSで関連候補を後から描画するというサイト側の挙動の違いで
+  「あり／なし」を判定。CLI単体（`python3 fanza_auto/scripts/check_missav.py <品番>`）に加え、
+  board_<cid>.html・dashboard.htmlの各カードに「🔎 MissAVを確認」ボタンを追加（`serve_board.py`の`/__missav`）。
+  結果は`item.json`の`missav`にキャッシュし、バッジ表示（⚠️あり／✓なし）。動画の視聴・DL・リンク案内は一切しない、
+  内部確認専用の機能。
 - [x] **1作品だけを動画つきで開くモード（再生・切り抜き・保存）**
   `build_board.py <cid>` で単一作品ボード `works/board_<cid>.html` を生成（動画プレーヤー＋切り抜き
   ツールバー＋保存ボタン＋既存 `cut_*.mp4` 一覧）。`serve_board.py <cid>` が単一ボードを生成→works/配信

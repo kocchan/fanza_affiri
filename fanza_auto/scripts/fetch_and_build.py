@@ -13,10 +13,9 @@ FANZA人気動画 → 投稿セット自動生成ツール
 
 使い方:
   python3 fetch_and_build.py
-  python3 fetch_and_build.py debz015                    # cid/URL指定（投稿予定日を対話で確認）
-  python3 fetch_and_build.py debz015 --date=2026-07-25   # 投稿予定日を明示指定
+  python3 fetch_and_build.py debz015                    # cid/URL指定で1作品だけ取り込む
   （認証情報はプロジェクト直下の .env から読む。設定は config.json で上書き可能）
-  取り込んだ作品は works/<YYYY-MM-DD>/ に保存される（投稿予定日ごとにフォルダを分ける）。
+  取り込んだ作品は works/<cid>_<作品名>/ に保存される（全作品まとめて1つの works/board.html に集約）。
 
 注意:
   - 画像/動画は「候補」を出すだけ。実際にどれを使うかは手動で選ぶ。
@@ -570,7 +569,7 @@ def fetch_item_by_cid(cid: str, cfg: dict) -> dict:
 
 def build_specific(cids: list, cfg: dict, out_dir: Path) -> None:
     """指定した cid（複数可）だけを works/<日付>/ に取り込む。"""
-    have = existing_cids(out_dir.parent)   # works/ 配下全体（他の日付フォルダも含む）から既出チェック
+    have = existing_cids(out_dir.parent)   # works/ 配下全体から既出チェック
     items = []
     for cid in cids:
         if cid in have:
@@ -613,21 +612,7 @@ def build_specific(cids: list, cfg: dict, out_dir: Path) -> None:
     print(f"\n✓ 完成: {len(built)}作品を追加 → {out_dir}")
     for folder, n in built:
         print(f"   - {folder.name}/  （画像{n}枚 + 投稿内容.md）")
-    print(f"\n  スケジュールダッシュボード: python3 {ROOT / 'scripts' / 'serve_schedule.py'}")
-
-
-def prompt_post_date(default: str) -> str:
-    """投稿予定日を対話入力で聞く（空欄・非対話環境なら既定=今日を使う）。"""
-    try:
-        raw = input(f"▶ 投稿予定日を入力してください（YYYY-MM-DD、空欄で{default}）: ").strip()
-    except (EOFError, OSError):
-        raw = ""   # 非対話環境（cronなど）では既定日をそのまま使う
-    if not raw:
-        return default
-    if not C.DATE_RE.match(raw):
-        print(f"  ※ 日付の形式が不正なので既定日（{default}）を使います。")
-        return default
-    return raw
+    print(f"\n  全体ボード: python3 {ROOT / 'scripts' / 'serve_schedule.py'}")
 
 
 def main(argv=None):
@@ -635,20 +620,8 @@ def main(argv=None):
     cfg = load_config()
     today = datetime.date.today().isoformat()
 
-    # ★ユーザー方針（2026-07-20）：作品は「進行中」という固定名ではなく、
-    #   投稿予定日ごとのフォルダ works/<YYYY-MM-DD>/ で管理する。
-    #   --date で明示指定できる。無ければ取り込み時に対話で聞く（空欄なら今日）。
-    date_flags = [a for a in argv if a.startswith("--date=")]
-    post_date = date_flags[0].split("=", 1)[1] if date_flags else None
-    argv = [a for a in argv if not a.startswith("--date=")]
-    if post_date and not C.DATE_RE.match(post_date):
-        sys.exit(f"✗ --date の形式が不正です（YYYY-MM-DD で指定）: {post_date}")
-    if not post_date:
-        post_date = prompt_post_date(today)
-
-    out_dir = ROOT / "works" / post_date
+    out_dir = ROOT / "works"
     out_dir.mkdir(parents=True, exist_ok=True)
-    print(f"▶ 投稿予定日: {post_date}（works/{post_date}/ に保存）")
 
     # cid / URL が渡されたら、その作品だけを取り込む。
     tokens = [a for a in argv if not a.startswith("-")]
@@ -672,7 +645,7 @@ def main(argv=None):
         if len(skipped) > 8:
             print(f"     …ほか {len(skipped)-8}件")
 
-    # ★差分追加：すでに works/ 配下（他の日付フォルダも含む）にある cid はスキップ。
+    # ★差分追加：すでに works/ 配下にある cid はスキップ。
     have = existing_cids(ROOT / "works")
     max_new = cfg.get("max_new_per_run", cfg.get("posts_per_day", 20))
     chosen, seen = [], set()
@@ -687,7 +660,7 @@ def main(argv=None):
 
     if not chosen:
         print(f"  ✓ 新規作品はありません（既存 {len(have)}作品はすべて掲載済み）。")
-        print(f"  スケジュールダッシュボード: python3 {ROOT / 'scripts' / 'serve_schedule.py'}")
+        print(f"  全体ボード: python3 {ROOT / 'scripts' / 'serve_schedule.py'}")
         return
     titles = " / ".join(it.get("title", "?") for it in chosen)
     print(f"  取得 {len(items)}件 → 既存 {len(have)}作品はスキップ → "
@@ -719,7 +692,7 @@ def main(argv=None):
     print(f"\n✓ 完成: {len(built)}作品を追加（各投稿に勝ち型を適用）→ {out_dir}")
     for folder, n in built:
         print(f"   - {folder.name}/  （画像{n}枚 + 投稿内容.md）")
-    print(f"\n  スケジュールダッシュボード: python3 {ROOT / 'scripts' / 'serve_schedule.py'}")
+    print(f"\n  全体ボード: python3 {ROOT / 'scripts' / 'serve_schedule.py'}")
 
 
 if __name__ == "__main__":

@@ -7,8 +7,8 @@
 ボード生成やメタ取得はこのモジュールだけを使って軽く動くようにしている。
 """
 
+import html
 import json
-import re
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -19,36 +19,6 @@ WORKS_DIR = ROOT / "works"
 
 ITEM_JSON = "item.json"        # 作品フォルダに置くメタ情報（DMM APIの生データ）
 POST_MD = "投稿内容.md"
-
-# ──────────────────────────────────────────────
-# 投稿予定日フォルダ（works/<YYYY-MM-DD>/<cid>_<作品名>/）
-#   ★ユーザー方針（2026-07-20）：作品は「進行中」という固定名ではなく、
-#   投稿する予定日ごとのフォルダで管理する。
-# ──────────────────────────────────────────────
-DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-def is_date_dir(path: Path) -> bool:
-    """works/ 直下にある、名前が YYYY-MM-DD の日付フォルダかどうか。"""
-    return path.is_dir() and bool(DATE_RE.match(path.name))
-
-
-def date_dirs() -> list:
-    """works/ 直下の日付フォルダを日付順で返す。"""
-    if not WORKS_DIR.is_dir():
-        return []
-    return sorted((p for p in WORKS_DIR.iterdir() if is_date_dir(p)),
-                  key=lambda p: p.name)
-
-
-def date_of(work_dir: Path):
-    """作品フォルダが日付フォルダの中にあれば、その日付文字列を返す。無ければ None。"""
-    for parent in work_dir.parents:
-        if parent == WORKS_DIR:
-            break
-        if is_date_dir(parent):
-            return parent.name
-    return None
 
 DEFAULT_CONFIG = {
     "site": "FANZA",
@@ -200,3 +170,46 @@ def write_item(work_dir: Path, item: dict) -> None:
     """作品フォルダに item.json を保存する。"""
     (work_dir / ITEM_JSON).write_text(
         json.dumps(item, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+# ──────────────────────────────────────────────
+# MissAV確認ボタン（board_<cid>.html / dashboard.html で共通の見た目）
+#   実際のチェック処理（check_missav.py・Playwright）はサーバー側
+#   （serve_board.py の /__missav）でのみ動く。ここは表示用のHTMLだけ組み立てる。
+#   結果は item.json の "missav" にキャッシュされ、再チェックするまで使い回す。
+# ──────────────────────────────────────────────
+def missav_block_html(item: dict, api_dir: str, uid: str) -> str:
+    cached = (item or {}).get("missav") or {}
+    status = cached.get("status")
+    if status == "found":
+        badge = '<span class="missav-badge found">⚠️ MissAVにあり</span>'
+    elif status == "not_found":
+        badge = '<span class="missav-badge clear">✓ MissAVになし</span>'
+    else:
+        badge = ""
+    checked_at = html.escape(cached.get("checked_at") or "")
+    note = f'<span class="missav-note">確認 {checked_at}</span>' if checked_at else ""
+    label = "再確認" if status else "🔎 MissAVを確認"
+    box_id = f"missav-{uid}"
+    return (f'<div class="missav" id="{box_id}">{badge}{note} '
+            f'<button class="missav-btn" data-dir="{html.escape(api_dir)}" '
+            f'data-target="{box_id}">{label}</button></div>')
+
+
+# ──────────────────────────────────────────────
+# アーカイブ操作ボタン（board.html / board_<cid>.html で共通）
+#   全体ボード側：📦 アーカイブ（1ボタン）
+#   アーカイブ一覧側：🗑 完全削除／↩ 全体ボードに戻す（2ボタン）
+#   実処理（item.json の "archived" 更新・フォルダ削除）はサーバー側
+#   （serve_board.py の /__archive・/__unarchive・/__delete_work）でのみ動く。
+# ──────────────────────────────────────────────
+def archive_block_html(api_dir: str, archived: bool) -> str:
+    dir_esc = html.escape(api_dir)
+    if archived:
+        return (f'<span class="archive-actions" data-dir="{dir_esc}">'
+                f'<button class="delete-btn" data-dir="{dir_esc}">🗑 完全削除</button>'
+                f'<button class="unarchive-btn" data-dir="{dir_esc}">↩ 全体ボードに戻す</button>'
+                f'</span>')
+    return (f'<span class="archive-actions" data-dir="{dir_esc}">'
+            f'<button class="archive-btn" data-dir="{dir_esc}">📦 アーカイブ</button>'
+            f'</span>')

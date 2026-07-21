@@ -9,8 +9,8 @@
   ただし切り抜き（ffmpeg処理）はサーバー経由でのみ動くので、
   `serve_board.py <cid>` から使うのが基本（file:// 直開きは再生と保存だけ）。
 
-複数作品をまとめて見たい・投稿の日時とアカウントを管理したいときは
-`schedule_board.py`（`works/進行中/dashboard.html`）を使う。こちらが全作品一覧の代わり。
+全作品をまとめて見たいときは `schedule_board.py`（`works/board.html`）を使う。
+アーカイブした作品は `works/archive.html` に集約される（`serve_schedule.py` 経由で操作）。
 
 投稿文は一度作ったら `works/posts.json` に保存して固定する。
 毎回作り直すと「昨日いいと思った文が今日は変わっている」ことになるため。
@@ -170,7 +170,6 @@ input[type=search]{flex:1;min-width:180px;padding:9px 12px;border:1px solid var(
 .count{font-size:.85rem;color:var(--sub);white-space:nowrap}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
  padding:18px;margin:16px 0}
-.card.done{opacity:.5}
 .card h2{font-size:1.1rem;margin:0 0 8px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 .cid{font-size:.75rem;color:var(--sub);font-weight:400}
 .meta{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.85rem;color:var(--sub);
@@ -198,6 +197,10 @@ button:hover{border-color:var(--accent);color:var(--accent)}
 button.copied{background:var(--okbg);color:var(--ok);border-color:transparent}
 .foot{display:flex;justify-content:space-between;align-items:center;gap:10px;
  border-top:1px solid var(--line);padding-top:12px;margin-top:4px;flex-wrap:wrap}
+.archive-actions{display:flex;gap:8px}
+button.delete-btn:hover{border-color:#dc2626;color:#dc2626}
+button.archive-btn{border-color:#dc2626;color:#dc2626}
+button.archive-btn:hover{background:#dc2626;color:#fff}
 a{color:var(--accent)}
 .empty{text-align:center;color:var(--sub);padding:40px 0}
 /* 動画（単一作品モード） */
@@ -274,6 +277,12 @@ button.go.primary{font-weight:700}
 .thumbgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
 .clip.thumb{padding:10px}
 .clip.thumb img{width:100%;height:auto;display:block;border-radius:8px;margin-bottom:8px}
+
+.missav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.8rem;margin:0 0 10px}
+.missav-badge{padding:2px 9px;border-radius:999px;font-weight:600}
+.missav-badge.found{background:var(--warnbg);color:var(--warn)}
+.missav-badge.clear{background:var(--okbg);color:var(--ok)}
+.missav-note{color:var(--sub);font-size:.76rem}
 """
 
 JS = """
@@ -302,36 +311,37 @@ document.addEventListener('click',e=>{
   if(el)copyText(el.textContent,b);
 });
 
-// 「投稿した」印はブラウザに保存する（サーバー不要）。
-const DONE='fanza_board_done';
-const done=new Set(JSON.parse(localStorage.getItem(DONE)||'[]'));
-function paint(){document.querySelectorAll('.card').forEach(c=>{
-  const on=done.has(c.dataset.cid);
-  c.classList.toggle('done',on);
-  const b=c.querySelector('button[data-done]');
-  if(b)b.textContent=on?'✓ 投稿済み':'投稿済みにする';});filter();}
-document.addEventListener('click',e=>{
-  const b=e.target.closest('button[data-done]');
+// アーカイブ操作（📦アーカイブ／🗑完全削除／↩全体ボードに戻す）。
+// board.html・archive.html・board_<cid>.html のどのページから叩いても
+// serve_board.py / serve_schedule.py 側の共通Handlerが処理する。
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('.archive-btn,.unarchive-btn,.delete-btn');
   if(!b)return;
-  const cid=b.closest('.card').dataset.cid;
-  done.has(cid)?done.delete(cid):done.add(cid);
-  localStorage.setItem(DONE,JSON.stringify([...done]));paint();});
-
-// 検索・絞り込みは一覧ボードにだけある（単一作品モードには無いので null 許容）。
-const q=document.getElementById('q'),hide=document.getElementById('hide'),
-      cnt=document.getElementById('cnt'),empty=document.getElementById('empty');
-function filter(){
-  if(!cnt)return;
-  const s=q?q.value.trim().toLowerCase():'';let n=0;
-  document.querySelectorAll('.card').forEach(c=>{
-    const hit=!s||c.dataset.search.includes(s);
-    const show=hit&&!(hide&&hide.checked&&done.has(c.dataset.cid));
-    c.style.display=show?'':'none';if(show)n++;});
-  cnt.textContent=n+' 件';
-  if(empty)empty.style.display=n?'none':'';}
-if(q)q.addEventListener('input',filter);
-if(hide)hide.addEventListener('change',filter);
-paint();
+  if(location.protocol==='file:'){
+    alert('この操作は serve_board.py / serve_schedule.py 経由でのみ動きます。');return;}
+  const dir=b.dataset.dir;
+  const card=b.closest('.card')||b.closest('article');
+  let url,label;
+  if(b.classList.contains('archive-btn')){url='/__archive';label='アーカイブ中…';}
+  else if(b.classList.contains('unarchive-btn')){url='/__unarchive';label='戻し中…';}
+  else{
+    if(!confirm('完全に削除します。元に戻せません。よろしいですか？'))return;
+    url='/__delete_work';label='削除中…';
+  }
+  const old=b.textContent;b.textContent=label;
+  b.disabled=true;
+  const sibling=b.parentElement?b.parentElement.querySelectorAll('button'):[];
+  sibling.forEach(x=>x.disabled=true);
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({dir})});
+    const j=await r.json();
+    if(!j.ok){alert('失敗: '+(j.error||'不明なエラー'));b.textContent=old;
+      sibling.forEach(x=>x.disabled=false);return;}
+    if(card)card.remove();
+  }catch(ex){alert('通信に失敗しました: '+ex);b.textContent=old;
+    sibling.forEach(x=>x.disabled=false);}
+});
 
 // ── 動画の切り抜き（単一作品モード）────────────────
 // 「現在」ボタン：入力欄に動画の再生位置（秒）を入れる。
@@ -607,6 +617,30 @@ document.addEventListener('click',async e=>{
   }catch(ex){err.textContent='通信に失敗しました: '+ex;}
   b.textContent=old;b.disabled=false;
 });
+
+// MissAV確認（品番が一致する動画が上がっていないか）。Playwrightで実ブラウザを動かすため
+// 数秒かかる。結果は item.json にキャッシュされ、次回はキャッシュした結果を表示する。
+function missavBadge(m){
+  if(m.status==='found')return '<span class="missav-badge found">⚠️ MissAVにあり</span>';
+  if(m.status==='not_found')return '<span class="missav-badge clear">✓ MissAVになし</span>';
+  return '';
+}
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('.missav-btn');if(!b)return;
+  const dir=b.dataset.dir, box=document.getElementById(b.dataset.target);
+  if(location.protocol==='file:'){alert('MissAV確認は serve_board.py 経由でのみ動きます。');return;}
+  const old=b.textContent;b.textContent='確認中…（数秒）';b.disabled=true;
+  try{
+    const r=await fetch('/__missav',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({dir})});
+    const j=await r.json();
+    if(!j.ok){alert('確認に失敗: '+(j.error||'不明なエラー'));b.textContent=old;b.disabled=false;return;}
+    const m=j.missav||{};
+    const note=m.checked_at?`<span class="missav-note">確認 ${m.checked_at}</span>`:'';
+    box.innerHTML=missavBadge(m)+note+
+      ` <button class="missav-btn" data-dir="${dir}" data-target="${box.id}">再確認</button>`;
+  }catch(ex){alert('通信に失敗しました: '+ex);b.textContent=old;b.disabled=false;}
+});
 """
 
 
@@ -794,6 +828,7 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
     cid = e["cid"]
     uid = cid.replace(".", "_")
     cautions = post.get("cautions") or []
+    missav_html = C.missav_block_html(e["item"], rel_dir(e["dir"]), uid)
 
     # ★ユーザー方針（2026-07-20）：ボードは「投稿にすぐ使うもの」だけを出す。
     #   収録時間/発売日/メーカー/ジャンルのメタ表示、賑やかし、アフィリンク単体は非表示。
@@ -828,20 +863,23 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
         f'      <h2>{esc(e["title"])}<span class="cid">{esc(cid)}</span></h2>',
         f'      <p class="meta">{" ".join(bits)}</p>' if bits else "",
         notice,
+        missav_html,
         render_video(e, uid) if single else "",
         f'      <span class="pat">型：{esc(post.get("label", ""))}</span>',
-        block("① サブ投稿（リンクを持たせる側）", post.get("sub", ""),
+        block("リンク投稿（アフィリンクを持たせる側）", post.get("sub", ""),
               f"sub-{uid}"),
-        block("② メイン投稿（①を引用して出す・リンクは貼らない）",
+        block("メイン投稿（リンク投稿を引用して出す・リンクは貼らない）",
               post.get("main", ""), f"main-{uid}"),
     ]
 
     page = (f'<a href="{esc(e["page_url"])}" target="_blank" '
             f'rel="noopener">FANZAの作品ページ →</a>') if e["page_url"] else ""
+    archived = bool(e["item"].get("archived"))
+    archive_html = C.archive_block_html(rel_dir(e["dir"]), archived)
     parts += [
         '      <div class="foot">',
         f'        <span>{page}</span>',
-        '        <button data-done="1">投稿済みにする</button>',
+        f'        {archive_html}',
         "      </div>",
         "    </article>",
     ]
@@ -852,15 +890,7 @@ def render_single(e: dict, post: dict) -> str:
     """単一作品ボード（動画つき）のHTML全体。"""
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     card = render_card(e, post, single=True)
-
-    # works/<日付>/ にある作品は、そこから開いたスケジュールダッシュボードへ
-    # 戻れるようにする（このHTML自体は works/ 直下にあるので相対パスで届く）。
-    # 全作品一覧（旧 board.html）は廃止したので、日付フォルダ外なら戻るリンクは出さない。
-    back_html = ""
-    date = C.date_of(e["dir"])
-    if date:
-        dash_href = urllib.parse.quote(date) + "/dashboard.html"
-        back_html = f'<a href="{dash_href}">← {esc(date)} の投稿スケジュールへ</a> ／ '
+    back_html = '<a href="board.html">← 全体ボードへ</a> ／ '
 
     return f"""<!DOCTYPE html>
 <html lang="ja">
@@ -911,7 +941,7 @@ def rebuild_all(cfg: dict, regen: bool = False) -> int:
     """works/ 配下の全作品ぶんの個別ボードを作り直す。
     テンプレート（このファイルのHTML/CSS/JS）を変更したときに、
     「一部の作品だけ再生成し忘れる」を防ぐための一括コマンド。
-    schedule_board.py が入っていれば、日付ダッシュボードも合わせて作り直す。"""
+    schedule_board.py が入っていれば、全体ボード／アーカイブ一覧も合わせて作り直す。"""
     entries = collect(cfg)
     if not entries:
         print("works/ に作品フォルダがありません。")
@@ -922,13 +952,10 @@ def rebuild_all(cfg: dict, regen: bool = False) -> int:
 
     try:
         import schedule_board as SB
+        SB.build_all(cfg)
+        print("✓ 全体ボード／アーカイブ一覧も再生成しました。")
     except Exception:
-        return 0
-    dates = C.date_dirs()
-    for d in dates:
-        SB.build_for_date(d.name, cfg)
-    if dates:
-        print(f"✓ 日付ダッシュボード {len(dates)} 件も再生成しました。")
+        pass
     return 0
 
 
@@ -938,15 +965,14 @@ def main(argv) -> int:
     cfg = C.load_config(require_api=False)
     regen = "--regen" in flags
 
-    # --all：全作品の個別ボード（＋日付ダッシュボード）を一括で作り直す。
+    # --all：全作品の個別ボード（＋全体ボード／アーカイブ一覧）を一括で作り直す。
     # テンプレートを変更した直後は、cidを1つずつ指定するより --all を使うこと
     # （一部の作品だけ再生成し忘れる事故を防ぐ）。
     if "--all" in flags:
         return rebuild_all(cfg, regen)
 
     # cid を指定して、その1作品だけのボード（動画つき）を作る。
-    # 全作品一覧（旧 board.html）は廃止：一覧は schedule_board.py
-    # （works/<日付>/dashboard.html）が担う。
+    # 全作品一覧は schedule_board.py（works/board.html・works/archive.html）が担う。
     if not positional:
         print("使い方: python3 fanza_auto/scripts/build_board.py <cid> [--open] [--regen]")
         print("       python3 fanza_auto/scripts/build_board.py --all [--regen]   # 全作品を一括再生成")
