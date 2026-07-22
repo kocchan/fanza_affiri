@@ -1,43 +1,45 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-1作品ぶんの投稿ボード `works/board_<cid>.html` を作る（動画プレーヤー・切り抜き・保存つき）。
+MyFans 1作品ぶんの投稿ボード `works/board_<投稿ID>.html` を作る
+（動画プレーヤー・切り抜き・保存つき）。fanza_auto/scripts/build_board.py の
+MyFans向け簡略版（レビュー評価・ジャンル・発売日・MissAV確認は無い＝表示しない）。
 
 やること:
-  指定した cid の作品について「作品情報」「投稿文（1本）」「アフィリリンク」を
+  指定した投稿IDの作品について「作品情報」「投稿文（1本）」「アフィリリンク」を
   1枚のHTMLにまとめ、それぞれワンクリックでコピーできるようにする。
   ただし切り抜き（ffmpeg処理）はサーバー経由でのみ動くので、
-  `serve_board.py <cid>` から使うのが基本（file:// 直開きは再生と保存だけ）。
+  `serve.py <投稿ID>` から使うのが基本（file:// 直開きは再生と保存だけ）。
 
-全作品をまとめて見たいときは `schedule_board.py`（`works/board.html`）を使う。
-アーカイブした作品は `works/archive.html` に集約される（`serve_schedule.py` 経由で操作）。
+全作品をまとめて見たいときは `dashboard.py`（`works/board.html`）を使う。
+アーカイブした作品は `works/archive.html` に集約される（`serve.py` 経由で操作）。
 
 投稿文は一度作ったら `works/posts.json` に保存して固定する。
-毎回作り直すと「昨日いいと思った文が今日は変わっている」ことになるため。
 文を作り直したいときだけ --regen を付ける。
 
 使い方（プロジェクトのルートフォルダで実行）:
-    python3 fanza_auto/scripts/build_board.py debz015    # その1作品だけ（動画つき）
-    python3 fanza_auto/scripts/build_board.py debz015 --regen   # 投稿文を作り直す
-    python3 fanza_auto/scripts/build_board.py debz015 --open    # 作ってそのまま開く
+    python3 myfans_auto/scripts/board.py <投稿ID>            # その1作品だけ（動画つき）
+    python3 myfans_auto/scripts/board.py <投稿ID> --regen    # 投稿文を作り直す
+    python3 myfans_auto/scripts/board.py <投稿ID> --open     # 作ってそのまま開く
 """
 
 import datetime
 import html
 import json
-import random
 import subprocess
 import sys
 import urllib.parse
 
+import caption as CAP
 import common as C
 import post_text as PT
+import templates as T
 
 POSTS_JSON = C.WORKS_DIR / "posts.json"
 
 
 def single_board_path(cid: str):
-    """単一作品ボードのファイルパス（works/board_<cid>.html）。"""
+    """単一作品ボードのファイルパス（works/board_<投稿ID>.html）。"""
     safe = "".join(ch for ch in cid if ch.isalnum() or ch in "_-")
     return C.WORKS_DIR / f"board_{safe}.html"
 
@@ -61,7 +63,7 @@ def save_posts(posts: dict) -> None:
 
 
 def set_main_text(cid: str, text: str) -> None:
-    """メイン投稿文だけを人の手で上書き保存する（個別ページの💾保存ボタンから呼ばれる）。"""
+    """メイン投稿文だけを人の手で上書き保存する（手動編集・AI再生成ボタンの両方から呼ばれる）。"""
     posts = load_posts()
     post = posts.get(cid) or {}
     post["main"] = text
@@ -70,13 +72,21 @@ def set_main_text(cid: str, text: str) -> None:
 
 
 def ensure_posts(entries: list, regen: bool) -> dict:
-    """作品ごとの投稿文を用意する（既にあれば使い回す）。"""
+    """作品ごとの投稿文を用意する（既にあれば使い回す）。
+
+    リンク投稿（sub）・賑やかしは post_text.py（FANZA用）をそのまま流用するが、
+    メイン投稿だけは本文（description）から場所・シチュエーションを拾って
+    その作品らしい短い反応文にする（caption.py）。post_text.py の型選択は
+    レビュー/ジャンル前提でMyFansには効かないため、メインはここで作り直す。"""
     posts = load_posts()
     made = 0
     for e in entries:
         cid = e["cid"]
         if regen or cid not in posts:
-            posts[cid] = PT.build(e["item"], e["aff_url"])
+            post = PT.build(e["item"], e["aff_url"])
+            post["main"] = CAP.build_main_text(
+                e["item"].get("description", ""), T.REACTION_HOOKS)
+            posts[cid] = post
             made += 1
     save_posts(posts)
     if made:
@@ -88,44 +98,20 @@ def ensure_posts(entries: list, regen: bool) -> dict:
 # ──────────────────────────────────────────────
 # 作品情報の組み立て
 # ──────────────────────────────────────────────
-def collect(cfg: dict) -> list:
-    """works/ を走査して、ボードに出す作品の情報を集める。"""
+def collect() -> list:
+    """works/ を走査して、ボードに出す作品の情報を集める。
+    MyFansには評価・ジャンル・発売日・メーカーが無いのでFANZA版のcollect()より項目が少ない。"""
     entries = []
     for d in C.work_dirs():
         item = C.read_item(d)
         cid = C.cid_of(d)
-        aff_url = item.get("affiliateURL") or ""
-        if aff_url:
-            aff_url = C.rewrite_aff_url(aff_url, cfg)
-            # ★ユーザー方針（2026-07-20）：短縮せず元のフルURLを使う
-            #   （config.json の shorten_links）。短縮ONのときだけ bit.ly を使い、
-            #   APIを毎回叩かないよう item.json にキャッシュする（af_id変更等で
-            #   元URLが変わったときだけ作り直す）。
-            if cfg.get("shorten_links", False):
-                if item.get("short_url") and item.get("short_url_src") == aff_url:
-                    aff_url = item["short_url"]
-                else:
-                    short = C.shorten_url(aff_url, cfg)
-                    if short != aff_url:
-                        item["short_url"] = short
-                        item["short_url_src"] = aff_url
-                        C.write_item(d, item)
-                    aff_url = short
-        avg, count = PT.review_of(item)
         entries.append({
             "dir": d,
             "cid": cid,
             "item": item,
-            "aff_url": aff_url,
+            "aff_url": item.get("affiliateURL") or "",
             "title": item.get("title") or d.name.split("_", 1)[-1],
-            "review_avg": avg,
-            "review_count": count,
-            "duration": PT.duration_text(item),
-            "date": (item.get("date") or "")[:10],
-            "maker": ", ".join(
-                m.get("name", "") for m in
-                ((item.get("iteminfo") or {}).get("maker") or [])),
-            "genres": PT.genres_of(item),
+            "creator": item.get("creator") or "",
             "page_url": item.get("URL") or "",
             "has_meta": bool(item),
             "has_movie": (d / "sample.mp4").is_file(),
@@ -135,8 +121,7 @@ def collect(cfg: dict) -> list:
             # 手動で作った素材（区間切り cut_* ＋ 画面トリミング crop_*）
             "clips": sorted(p.name for p in d.glob("*.mp4")
                             if p.name.startswith(("cut_", "crop_"))),
-            # サムネの元ネタ候補：採用画像（システム抽出）＋動画から切り抜いた静止画。
-            # どちらも「まだ確定していない候補」として同じ横並び一覧に出す。
+            # サムネの元ネタ候補：取り込んだサムネ画像＋動画から切り抜いた静止画。
             "images": sorted(p.name for p in d.glob("[0-9][0-9].jpg")),
             "grabs": sorted(p.name for p in d.glob("clip_*.jpg")),
             # 確定したサムネ（候補をOK/トリミングして作った成果物）
@@ -146,11 +131,8 @@ def collect(cfg: dict) -> list:
 
 
 def sort_key(e: dict):
-    """おすすめ順：レビューが良く、件数がある作品を上に。"""
-    avg = e["review_avg"] if e["review_avg"] is not None else 0.0
-    # 件数1件の★5.00 より、件数の多い★4.6 を上に出したいので件数で重み付け
-    weight = min(e["review_count"], 20) / 20.0
-    return (-(avg * (0.5 + 0.5 * weight)), -e["review_count"], e["cid"])
+    """おすすめ順：動画が入っている（＝投稿に使える）作品を上に、あとは取り込み順。"""
+    return (0 if e["has_movie"] else 1, e["cid"])
 
 
 # ──────────────────────────────────────────────
@@ -291,12 +273,6 @@ button.go.primary{font-weight:700}
 .thumbgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
 .clip.thumb{padding:10px}
 .clip.thumb img{width:100%;height:auto;display:block;border-radius:8px;margin-bottom:8px}
-
-.missav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.8rem;margin:0 0 10px}
-.missav-badge{padding:2px 9px;border-radius:999px;font-weight:600}
-.missav-badge.found{background:var(--warnbg);color:var(--warn)}
-.missav-badge.clear{background:var(--okbg);color:var(--ok)}
-.missav-note{color:var(--sub);font-size:.76rem}
 """
 
 JS = """
@@ -326,12 +302,12 @@ document.addEventListener('click',e=>{
   if(el)copyText(el.tagName==='TEXTAREA'?el.value:el.textContent,b);
 });
 
-// メイン投稿の手動保存（自由に書き換えて💾保存。作り直したいときはチャットでClaudeに直接指示する運用）
+// メイン投稿の手動保存（自由に書き換えて💾保存）
 document.addEventListener('click',async e=>{
   const b=e.target.closest('.save-main');if(!b)return;
   const dir=b.dataset.dir, ta=document.getElementById(b.dataset.target);
   const stat=document.getElementById('savestat-'+b.dataset.target);
-  if(location.protocol==='file:'){alert('保存は serve_board.py 経由でのみ動きます。');return;}
+  if(location.protocol==='file:'){alert('保存は serve.py 経由でのみ動きます。');return;}
   const old=b.textContent;b.textContent='保存中…';b.disabled=true;
   try{
     const r=await fetch('/__save_post',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -345,12 +321,12 @@ document.addEventListener('click',async e=>{
 
 // アーカイブ操作（📦アーカイブ／🗑完全削除／↩全体ボードに戻す）。
 // board.html・archive.html・board_<cid>.html のどのページから叩いても
-// serve_board.py / serve_schedule.py 側の共通Handlerが処理する。
+// serve.py 側の共通Handlerが処理する。
 document.addEventListener('click',async e=>{
   const b=e.target.closest('.archive-btn,.unarchive-btn,.delete-btn');
   if(!b)return;
   if(location.protocol==='file:'){
-    alert('この操作は serve_board.py / serve_schedule.py 経由でのみ動きます。');return;}
+    alert('この操作は serve.py 経由でのみ動きます。');return;}
   const dir=b.dataset.dir;
   const card=b.closest('.card')||b.closest('article');
   let url,label;
@@ -440,7 +416,7 @@ document.addEventListener('click',async e=>{
   const err=box.closest('.video').querySelector('.err');
   err.textContent='';
   if(location.protocol==='file:'){
-    err.textContent='この機能は serve_board.py 経由でのみ動きます（今は file:// で開いています）。';return;}
+    err.textContent='この機能は serve.py 経由でのみ動きます（今は file:// で開いています）。';return;}
 
   // 区間の秒（時間で切る欄と共有）
   const s=document.getElementById(box.dataset.start).value.trim();
@@ -503,7 +479,7 @@ document.addEventListener('click',async e=>{
   const err=scope.querySelector('.err');
   err.textContent='';
   if(location.protocol==='file:'){
-    err.textContent='削除は serve_board.py 経由でのみ動きます（今は file:// で開いています）。';return;}
+    err.textContent='削除は serve.py 経由でのみ動きます（今は file:// で開いています）。';return;}
   if(!confirm(`「${file}」を削除します。元に戻せません。よろしいですか？`))return;
   const old=b.textContent;b.textContent='削除中…';b.disabled=true;
   try{
@@ -555,7 +531,7 @@ document.addEventListener('click',async e=>{
   const vid=document.getElementById(b.dataset.vid);
   const err=b.closest('.thumbtool').querySelector('.err');
   err.textContent='';
-  if(location.protocol==='file:'){err.textContent='この機能は serve_board.py 経由でのみ動きます。';return;}
+  if(location.protocol==='file:'){err.textContent='この機能は serve.py 経由でのみ動きます。';return;}
   const sec=(Math.round((vid.currentTime||0)*10)/10);
   const old=b.textContent;b.textContent='切り抜き中…';b.disabled=true;
   try{
@@ -632,7 +608,7 @@ document.addEventListener('click',async e=>{
   const err=b.closest('.thumbtool').querySelector('.err');
   err.textContent='';
   if(!file){err.textContent='先に候補から画像を選んでください。';return;}
-  if(location.protocol==='file:'){err.textContent='この機能は serve_board.py 経由でのみ動きます。';return;}
+  if(location.protocol==='file:'){err.textContent='この機能は serve.py 経由でのみ動きます。';return;}
   const old=b.textContent;b.textContent='確定中…';b.disabled=true;
   try{
     let r;
@@ -648,30 +624,6 @@ document.addEventListener('click',async e=>{
     else{addThumb(uid,dir,j.file);}
   }catch(ex){err.textContent='通信に失敗しました: '+ex;}
   b.textContent=old;b.disabled=false;
-});
-
-// MissAV確認（品番が一致する動画が上がっていないか）。Playwrightで実ブラウザを動かすため
-// 数秒かかる。結果は item.json にキャッシュされ、次回はキャッシュした結果を表示する。
-function missavBadge(m){
-  if(m.status==='found')return '<span class="missav-badge found">⚠️ MissAVにあり</span>';
-  if(m.status==='not_found')return '<span class="missav-badge clear">✓ MissAVになし</span>';
-  return '';
-}
-document.addEventListener('click',async e=>{
-  const b=e.target.closest('.missav-btn');if(!b)return;
-  const dir=b.dataset.dir, box=document.getElementById(b.dataset.target);
-  if(location.protocol==='file:'){alert('MissAV確認は serve_board.py 経由でのみ動きます。');return;}
-  const old=b.textContent;b.textContent='確認中…（数秒）';b.disabled=true;
-  try{
-    const r=await fetch('/__missav',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({dir})});
-    const j=await r.json();
-    if(!j.ok){alert('確認に失敗: '+(j.error||'不明なエラー'));b.textContent=old;b.disabled=false;return;}
-    const m=j.missav||{};
-    const note=m.checked_at?`<span class="missav-note">確認 ${m.checked_at}</span>`:'';
-    box.innerHTML=missavBadge(m)+note+
-      ` <button class="missav-btn" data-dir="${dir}" data-target="${box.id}">再確認</button>`;
-  }catch(ex){alert('通信に失敗しました: '+ex);b.textContent=old;b.disabled=false;}
 });
 """
 
@@ -860,25 +812,11 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
     cid = e["cid"]
     uid = cid.replace(".", "_")
     dir_name = rel_dir(e["dir"])
-    cautions = post.get("cautions") or []
-    missav_html = C.missav_block_html(e["item"], dir_name, uid)
 
-    # ★ユーザー方針（2026-07-20）：ボードは「投稿にすぐ使うもの」だけを出す。
-    #   収録時間/発売日/メーカー/ジャンルのメタ表示、賑やかし、アフィリンク単体は非表示。
-    #   （アフィリンクは①サブ投稿の本文に入っているので、そちらでコピーできる）
-    #   ★レビュー★だけは作品選びの判断に使うので残す。
-    bits = []
-    if e["review_avg"] is not None:
-        bits.append(f"★<b>{e['review_avg']:.2f}</b>"
-                    f"（{e['review_count']}件）")
-
-    # ★ユーザー方針（2026-07-20）：未成年連想ジャンルのオンページ警告は非表示にする
-    #   （画像は毎回目視確認しているとのこと）。判定自体（cautions）はターミナルに
-    #   ログするだけに留め、判定ロジックは削除しない（後で戻せるように）。
     notice = ""
     if not e["has_meta"]:
-        notice += ('<p class="notice">作品情報が取れていません（配信終了の可能性）。'
-                   '<code>meta.py</code> で取り直せます。</p>')
+        notice += ('<p class="notice">作品情報が取れていません。'
+                   'myfans_fetch.py で取り込み直してください。</p>')
 
     def block(label, text, elid, extra_cls=""):
         return f"""      <div class="blk">
@@ -889,7 +827,8 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
 
     def main_block(text, elid, dir_name):
         """メイン投稿は自由編集できるようにする（コピー・手動保存）。
-        書き直したいときはボード上ではなく、Claude Codeのチャットで直接指示する。"""
+        書き直したいときはボード上ではなく、Claude Codeのチャットで直接指示する
+        （「〇〇のキャプション作って」等）→ そちらで /__save_post を呼んで保存する。"""
         return f"""      <div class="blk">
         <div class="blk-h"><span>メイン投稿（リンク投稿を引用して出す・リンクは貼らない）</span>
           <button data-copy="{elid}">コピー</button></div>
@@ -899,28 +838,27 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
           <span class="save-status" id="savestat-{elid}"></span>
         </div>
         <p class="hintsm">文章を作り直したいときは、ここではなく<b>Claude Codeのチャットで直接指示</b>してください
-          （例：「この作品のキャプション作り直して」）。</p>
+          （例：「この投稿のキャプション作り直して」）。</p>
       </div>"""
 
-    # 検索は今も作品名・cid・ジャンル・メーカーで引けるようにしておく（表示はしない）
-    search = f"{e['title']} {cid} {' '.join(e['genres'])} {e['maker']}".lower()
+    # 検索は作品名・投稿ID・投稿者名で引けるようにしておく（表示はしない）
+    search = f"{e['title']} {cid} {e['creator']}".lower()
+    creator_html = (f'<span class="cid">{esc(e["creator"])}さん</span>'
+                    if e["creator"] else "")
 
     description = (e["item"].get("description") or "").strip()
     description_block = (
-        block("作品説明（FANZAの商品ページから自動取得・参考用）", description,
+        block("投稿ページの本文（MyFansから自動取得・参考用）", description,
               f"desc-{uid}")
         if single and description else "")
 
     parts = [
         f'    <article class="card" data-cid="{esc(cid)}" '
         f'data-search="{esc(search)}">',
-        f'      <h2>{esc(e["title"])}<span class="cid">{esc(cid)}</span></h2>',
-        f'      <p class="meta">{" ".join(bits)}</p>' if bits else "",
+        f'      <h2>{esc(e["title"])}{creator_html}</h2>',
         notice,
-        missav_html,
         render_video(e, uid) if single else "",
         description_block,
-        f'      <span class="pat">型：{esc(post.get("label", ""))}</span>',
         block("リンク投稿（アフィリンクを持たせる側）", post.get("sub", ""),
               f"sub-{uid}"),
         main_block(post.get("main", ""), f"main-{uid}", dir_name) if single else
@@ -929,7 +867,7 @@ def render_card(e: dict, post: dict, single: bool = False) -> str:
     ]
 
     page = (f'<a href="{esc(e["page_url"])}" target="_blank" '
-            f'rel="noopener">FANZAの作品ページ →</a>') if e["page_url"] else ""
+            f'rel="noopener">MyFansの投稿ページ →</a>') if e["page_url"] else ""
     archived = bool(e["item"].get("archived"))
     archive_html = C.archive_block_html(dir_name, archived)
     parts += [
@@ -953,7 +891,7 @@ def render_single(e: dict, post: dict) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{esc(e['title'])}｜FANZA 投稿ボード</title>
+<title>{esc(e['title'])}｜MyFans 投稿ボード</title>
 <style>{CSS}</style>
 </head>
 <body>
@@ -971,44 +909,41 @@ def render_single(e: dict, post: dict) -> str:
 """
 
 
-def build_single(cid: str, cfg: dict, regen: bool):
-    """cid 1件ぶんのボードを生成してパスを返す。見つからなければ None。"""
-    entries = collect(cfg)
+def build_single(cid: str, regen: bool):
+    """投稿ID 1件ぶんのボードを生成してパスを返す。見つからなければ None。"""
+    entries = collect()
     match = next((e for e in entries if e["cid"] == cid), None)
     if match is None:
         avail = ", ".join(sorted(e["cid"] for e in entries))
-        print(f"✗ cid={cid} の作品が works/ に見つかりません。")
-        print(f"  使える cid: {avail}")
+        print(f"✗ 投稿ID={cid} の作品が works/ に見つかりません。")
+        print(f"  使える投稿ID: {avail}")
         return None
     posts = ensure_posts([match], regen=regen)
     out = single_board_path(cid)
     out.write_text(render_single(match, posts.get(cid, {})), encoding="utf-8")
     print(f"✓ 単一作品ボードを作りました: {out}")
     if not match["has_movie"]:
-        print("  ※ この作品にはサンプル動画がありません（切り抜きは使えません）。")
-    cautions = posts.get(cid, {}).get("cautions") or []
-    if cautions:
-        print(f"  ⚠️ {cid}: {'・'.join(cautions)} のジャンル付き。"
-              "画像は未成年に見えないか目視で確認してください。")
+        print("  ※ この作品にはまだ動画がありません（拡張機能でDL→ルートフォルダに置いて"
+              "「🎬 動画を取り込む」で反映してください）。")
     return out
 
 
-def rebuild_all(cfg: dict, regen: bool = False) -> int:
+def rebuild_all(regen: bool = False) -> int:
     """works/ 配下の全作品ぶんの個別ボードを作り直す。
     テンプレート（このファイルのHTML/CSS/JS）を変更したときに、
     「一部の作品だけ再生成し忘れる」を防ぐための一括コマンド。
-    schedule_board.py が入っていれば、全体ボード／アーカイブ一覧も合わせて作り直す。"""
-    entries = collect(cfg)
+    dashboard.py が入っていれば、全体ボード／アーカイブ一覧も合わせて作り直す。"""
+    entries = collect()
     if not entries:
         print("works/ に作品フォルダがありません。")
         return 1
     for e in entries:
-        build_single(e["cid"], cfg, regen)
+        build_single(e["cid"], regen)
     print(f"\n✓ 個別ボード {len(entries)} 件を再生成しました。")
 
     try:
-        import schedule_board as SB
-        SB.build_all(cfg)
+        import dashboard as DB
+        DB.build_all()
         print("✓ 全体ボード／アーカイブ一覧も再生成しました。")
     except Exception:
         pass
@@ -1018,34 +953,29 @@ def rebuild_all(cfg: dict, regen: bool = False) -> int:
 def main(argv) -> int:
     flags = set(a for a in argv[1:] if a.startswith("--"))
     positional = [a for a in argv[1:] if not a.startswith("--")]
-    cfg = C.load_config(require_api=False)
     regen = "--regen" in flags
 
     # --all：全作品の個別ボード（＋全体ボード／アーカイブ一覧）を一括で作り直す。
-    # テンプレートを変更した直後は、cidを1つずつ指定するより --all を使うこと
-    # （一部の作品だけ再生成し忘れる事故を防ぐ）。
     if "--all" in flags:
-        return rebuild_all(cfg, regen)
+        return rebuild_all(regen)
 
-    # cid を指定して、その1作品だけのボード（動画つき）を作る。
-    # 全作品一覧は schedule_board.py（works/board.html・works/archive.html）が担う。
+    # 投稿IDを指定して、その1作品だけのボード（動画つき）を作る。
+    # 全作品一覧は dashboard.py（works/board.html・works/archive.html）が担う。
     if not positional:
-        print("使い方: python3 fanza_auto/scripts/build_board.py <cid> [--open] [--regen]")
-        print("       python3 fanza_auto/scripts/build_board.py --all [--regen]   # 全作品を一括再生成")
-        print("  例) python3 fanza_auto/scripts/build_board.py debz015")
+        print("使い方: python3 myfans_auto/scripts/board.py <投稿ID> [--open] [--regen]")
+        print("       python3 myfans_auto/scripts/board.py --all [--regen]   # 全作品を一括再生成")
         return 1
 
     cid = positional[0]
-    out = build_single(cid, cfg, regen)
+    out = build_single(cid, regen)
     if out is None:
         return 1
     print("  切り抜きを使うには: "
-          f"python3 fanza_auto/scripts/serve_board.py {cid}")
+          f"python3 myfans_auto/scripts/serve.py {cid}")
     if "--open" in flags:
         subprocess.run(["open", str(out)], check=False)
     return 0
 
 
 if __name__ == "__main__":
-    random.seed()
     sys.exit(main(sys.argv))

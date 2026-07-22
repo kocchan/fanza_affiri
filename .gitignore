@@ -5,6 +5,7 @@
 # ダウンロードした画像・動画（容量大・再生成可能）
 fanza_auto/works/
 fanza_auto/output/
+myfans_auto/works/
 
 # 競合分析スクリーンショット（画像ファイル）
 競合分析/*.png

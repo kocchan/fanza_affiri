@@ -138,6 +138,77 @@ def download_movie(cid: str, dest: Path, quality: str) -> bool:
 
 
 # ──────────────────────────────────────────────
+# 作品説明文（あらすじ）の取得
+#   DMM APIのレスポンスには説明文（あらすじ・タグ）が含まれないため、商品ページ
+#   （item["URL"]）を実ブラウザで開いて取得する。ページはNext.jsのクライアント
+#   描画で、requestsだけでは取れない（myfans_fetch.py の本文取得と同じ理由・同じ手法）。
+#   ページ内の JSON-LD（<script type="application/ld+json"> の Product.description）
+#   に説明文がそのまま入っているので、そこから読む（DOM文言の変化に強い）。
+#   1回の実行で複数作品を処理するため、ブラウザは使い回し、最後に close_desc_browser() で閉じる。
+# ──────────────────────────────────────────────
+_DESC_CONTEXT = None
+_DESC_PW = None
+_DESC_BROWSER = None
+
+
+def _get_desc_context():
+    global _DESC_CONTEXT, _DESC_PW, _DESC_BROWSER
+    if _DESC_CONTEXT is None:
+        from playwright.sync_api import sync_playwright
+        _DESC_PW = sync_playwright().start()
+        _DESC_BROWSER = _DESC_PW.chromium.launch(headless=True)
+        _DESC_CONTEXT = _DESC_BROWSER.new_context(
+            locale="ja-JP", user_agent=MOVIE_HEADERS["User-Agent"])
+        _DESC_CONTEXT.add_cookies([{"name": "age_check_done", "value": "1",
+                                    "domain": ".dmm.co.jp", "path": "/"}])
+    return _DESC_CONTEXT
+
+
+def close_desc_browser() -> None:
+    """説明文取得用ブラウザを閉じる（一連の取り込みの最後に必ず呼ぶ）。"""
+    global _DESC_CONTEXT, _DESC_PW, _DESC_BROWSER
+    if _DESC_BROWSER is not None:
+        _DESC_BROWSER.close()
+    if _DESC_PW is not None:
+        _DESC_PW.stop()
+    _DESC_CONTEXT = None
+    _DESC_PW = None
+    _DESC_BROWSER = None
+
+
+def fetch_description(url: str) -> str:
+    """商品ページから説明文（あらすじ・タグ）を取得する。取れなくても空文字を返すだけで
+    致命的にはしない（説明文は参考用の付加情報で、無くても投稿セット生成は続行できる）。"""
+    if not url:
+        return ""
+    try:
+        ctx = _get_desc_context()
+    except Exception as e:
+        print(f"  ・説明文取得をスキップ（playwright未導入等）: {e}")
+        return ""
+    page = ctx.new_page()
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_timeout(2500)
+        scripts = page.evaluate(
+            """() => Array.from(document.querySelectorAll(
+                'script[type="application/ld+json"]')).map(s => s.textContent)""")
+        for s in scripts:
+            try:
+                data = json.loads(s)
+            except Exception:
+                continue
+            if isinstance(data, dict) and data.get("@type") == "Product":
+                return (data.get("description") or "").strip()
+        return ""
+    except Exception as e:
+        print(f"  ! 説明文の取得に失敗（スキップして続行）: {e}")
+        return ""
+    finally:
+        page.close()
+
+
+# ──────────────────────────────────────────────
 # 文章生成
 # ──────────────────────────────────────────────
 def build_main_quote_text(pattern: str) -> str:
@@ -305,11 +376,14 @@ def build_post(item, rank, cfg, out_dir, detector,
     work = folder / "_src"             # 作業用（最後に削除）
     work.mkdir(exist_ok=True)
 
+    print(f"▶ #{rank} {title} ({cid}) 〔型:{pattern}〕")
+
+    # 説明文（あらすじ）を商品ページから取得する。DMM APIには含まれないため実ブラウザで開く。
+    description = fetch_description(item.get("URL", ""))
+
     # 作品メタ情報を保存する。ボード（board.html）と投稿文の生成がこれを読む。
     # 後から拾い直すこともできる（meta.py）が、取得時に残しておくのが確実。
-    C.write_item(folder, dict(item, affiliateURL=aff_url))
-
-    print(f"▶ #{rank} {title} ({cid}) 〔型:{pattern}〕")
+    C.write_item(folder, dict(item, affiliateURL=aff_url, description=description))
 
     # 公式サンプル画像
     official = []
@@ -353,7 +427,9 @@ def build_post(item, rank, cfg, out_dir, detector,
     shutil.rmtree(work, ignore_errors=True)
     has_mv = (folder / "sample.mp4").exists()
     print(f"  ✓ {name}/ … 画像{n_images}枚"
-          + (" + sample.mp4" if has_mv else "") + " + 投稿内容.md")
+          + (" + sample.mp4" if has_mv else "")
+          + (" + 説明文" if description else "")
+          + " + 投稿内容.md")
     return folder, n_images
 
 
@@ -609,6 +685,7 @@ def build_specific(cids: list, cfg: dict, out_dir: Path) -> None:
                                       pattern=pattern, famous=famous)
         built.append((folder, n_images))
 
+    close_desc_browser()
     print(f"\n✓ 完成: {len(built)}作品を追加 → {out_dir}")
     for folder, n in built:
         print(f"   - {folder.name}/  （画像{n}枚 + 投稿内容.md）")
@@ -685,6 +762,8 @@ def main(argv=None):
             item, idx + 1, cfg, out_dir, detector,
             pattern=pattern, famous=famous)
         built.append((folder, n_images))
+
+    close_desc_browser()
 
     # ★審査チェックリスト（人の最終目視用・ナレッジ準拠）。works/ 直下に最新分を残す。
     write_screening_report(out_dir, today, chosen, skipped, cfg)

@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-単一作品ボードを「動画の切り抜きも使える」状態で開くための小さなサーバー。
+MyFansの全体ボード（`works/board.html`）を、動画・画像の切り抜き/作成/削除、
+アーカイブ操作、URL取り込み、ルートフォルダの動画取り込みも使える状態で開くための
+小さなサーバー。fanza_auto/scripts/serve_board.py + serve_schedule.py の
+MyFans向け統合版（MissAV確認は無い）。
 
-`build_board.py <cid>` で作る単一作品ボードは、再生と保存だけなら file:// で開けるが、
-切り抜き（ffmpeg処理）はサーバーが要る。このスクリプトが：
-
-  1. その cid の board_<cid>.html を作り直し
+やること:
+  1. works/board.html・archive.html を作り直す
   2. works/ を配信（動画のシーク＝Rangeリクエストに対応）
   3. ブラウザで開く
-  4. ボードからの「✂ 切り抜く」（POST /__cut）を受けて cut_video.py を実行し、
-     cut_<開始>-<終了>.mp4 を作品フォルダに保存して返す
-  5. 「📦 アーカイブ」「🗑 完全削除」「↩ 全体ボードに戻す」（POST /__archive・
-     /__unarchive・/__delete_work）も受け付ける（全体ボード側で使うボタンだが、
-     この共通Handlerを継承する serve_schedule.py からも同じ処理が呼ばれる）
+  4. 各カード／個別ページからの操作を受け付ける：
+     - ✂ 切り抜く（POST /__cut）・🔲 画面トリミング（/__crop）→ cut_video.py / crop_video.py
+     - 📸 静止画切り抜き（/__grab）・🖼 サムネ確定（/__select_thumb・/__crop_image）
+     - 🗑 削除（/__del）・📦 アーカイブ／↩ 戻す／🗑 完全削除（/__archive・/__unarchive・/__delete_work）
+     - ＋ 取り込む（/__fetch）… URL欄に貼ったMyFansアフィリンクを myfans_fetch.py で取り込む
+     - 🎬 動画を取り込む（/__import_video）… プロジェクトのルートフォルダに置いた動画
+       （拡張機能でDLしたもの）を import_video.py でタイトル一致の作品フォルダへ振り分ける
+     - 💾 保存（/__save_post）… メイン投稿文の手動編集を posts.json に保存
+       （文章を作り直したいときはボード上のボタンではなく、Claude Codeのチャットで直接指示する運用）
 
 使い方（プロジェクトのルートフォルダで実行）:
-    python3 fanza_auto/scripts/serve_board.py <cid> [ポート]
-    例) python3 fanza_auto/scripts/serve_board.py debz015
+    python3 myfans_auto/scripts/serve.py [ポート]
 
 止めるとき: Ctrl+C
 """
@@ -35,16 +39,18 @@ import sys
 import webbrowser
 from pathlib import Path
 
-import build_board as BB
-import check_missav as CM
+import board as BB
 import common as C
-import schedule_board as SB
+import dashboard as DB
+import import_video as IV
+import myfans_fetch as MF
 
 ROOT = str(C.WORKS_DIR)
 CUT_PY = str(C.ROOT / "scripts" / "cut_video.py")
 CROP_PY = str(C.ROOT / "scripts" / "crop_video.py")
 GRAB_PY = str(C.ROOT / "scripts" / "grab_frame.py")
 CROP_IMG_PY = str(C.ROOT / "scripts" / "crop_image.py")
+FETCH_PY = str(C.ROOT / "scripts" / "myfans_fetch.py")
 
 # サムネ用に選べる「採用画像」の命名規則（01.jpg〜）。これ以外のjpgは選ばせない。
 IMAGE_RE = re.compile(r"^\d{2}\.jpg$")
@@ -170,21 +176,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # ── 動画の切り抜き（/__cut）・画面トリミング（/__crop）・削除（/__del）
     #    ・静止画切り抜き（/__grab）・採用画像から選ぶ（/__select_thumb）
     #    ・画像トリミング（/__crop_image）・アーカイブ（/__archive・/__unarchive・
-    #    /__delete_work）・メイン投稿文の手動保存（/__save_post）─────────────
+    #    /__delete_work）・URL取り込み（/__fetch）・動画取り込み（/__import_video）
+    #    ─────────────────────
     def do_POST(self):
         path = self.path.split("?")[0]
         if path not in ("/__cut", "/__crop", "/__del",
                         "/__grab", "/__select_thumb", "/__crop_image",
-                        "/__missav", "/__archive", "/__unarchive", "/__delete_work",
-                        "/__save_post"):
+                        "/__archive", "/__unarchive", "/__delete_work",
+                        "/__fetch", "/__import_video", "/__save_post"):
             return self.send_error(404, "not found")
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b"{}"
         try:
             req = json.loads(body or b"{}")
 
+            # URL欄に貼ったMyFansアフィリンクを取り込む（タイトル・説明文・サムネ画像のみ）。
+            if path == "/__fetch":
+                return self._handle_fetch(req)
+
+            # プロジェクトのルートフォルダに置いた動画を、タイトル一致で対応フォルダへ振り分ける。
+            if path == "/__import_video":
+                return self._handle_import_video()
+
             # メイン投稿文の手動保存（posts.json の main を上書き）。
-            # 文章を作り直したいときはボード上ではなくチャットでClaudeに指示する運用。
+            # 文章を作り直したいときはボード上のボタンではなくチャットでClaudeに指示する運用。
             if path == "/__save_post":
                 folder = self._safe_dir(req.get("dir"))
                 if not folder:
@@ -206,12 +221,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 item["archived"] = (path == "/__archive")
                 C.write_item(folder, item)
                 cid = C.cid_of(folder)
-                cfg = C.load_config(require_api=False)
                 try:
-                    BB.build_single(cid, cfg, regen=False)
+                    BB.build_single(cid, regen=False)
                 except Exception as ex:
                     print(f"  ! board_{cid} の再生成に失敗: {ex}")
-                SB.build_all(cfg)
+                DB.build_all()
                 verb = "アーカイブしました" if item["archived"] else "全体ボードに戻しました"
                 print(f"  📦 {req.get('dir')} を{verb}")
                 return self._json(200, {"ok": True})
@@ -226,27 +240,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 single_html = BB.single_board_path(cid)
                 if single_html.is_file():
                     single_html.unlink()
-                cfg = C.load_config(require_api=False)
-                SB.build_all(cfg)
+                DB.build_all()
                 print(f"  🗑 完全削除: {req.get('dir')}")
                 return self._json(200, {"ok": True})
-
-            # MissAVに一致する動画が上がっていないかを確認する（Playwrightで実ブラウザ操作・
-            # 数秒かかる）。結果は item.json にキャッシュし、ボード/ダッシュボードを作り直す。
-            if path == "/__missav":
-                folder = self._safe_dir(req.get("dir"))
-                if not folder:
-                    return self._json(400, {"ok": False, "error": "dir が不正"})
-                try:
-                    missav = CM.check_and_cache(Path(folder))
-                except Exception as ex:
-                    return self._json(500, {"ok": False, "error": f"確認処理に失敗: {ex}"})
-                if missav.get("status") == "error":
-                    return self._json(502, {"ok": False,
-                                            "error": missav.get("error") or "確認に失敗しました"})
-                print(f"  🔎 MissAV確認: {req.get('dir')} → {missav['status']}")
-                self._rebuild_board(req.get("dir"))
-                return self._json(200, {"ok": True, "missav": missav})
 
             # 作った素材（cut_/crop_の動画、clip_/thumb_の画像）だけを削除する。
             # 元動画・採用画像・他ファイルは消せない。
@@ -413,37 +409,82 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json(500, {"ok": False, "error": str(ex)})
 
     def _rebuild_board(self, dir_rel):
-        """切り抜き/削除の直後に board_<cid>.html と全体ボード／アーカイブ一覧を作り直す。
+        """切り抜き/削除の直後に board_<投稿ID>.html と全体ボード／アーカイブ一覧を作り直す。
         作り直さないと「消した/作った動画がリロードで元に戻る」ことになる
-        （HTMLは静的ファイルで、生成時点のファイル一覧を固定で持つため）。
-        単体（serve_board.py）で使っていても全体ボードが古いままにならないよう、
-        常に両方を同期する。"""
+        （HTMLは静的ファイルで、生成時点のファイル一覧を固定で持つため）。"""
         work_dir = C.WORKS_DIR / (dir_rel or "")
-        cfg = C.load_config(require_api=False)
         try:
             cid = C.cid_of(work_dir)
-            BB.build_single(cid, cfg, regen=False)
+            BB.build_single(cid, regen=False)
         except Exception as ex:
             print(f"  ! board_{dir_rel} の再生成に失敗: {ex}")
         try:
-            SB.build_all(cfg)
+            DB.build_all()
         except Exception as ex:
             print(f"  ! 全体ボードの再生成に失敗: {ex}")
+
+    def _handle_fetch(self, req):
+        """URL欄に貼ったMyFansアフィリンクを myfans_fetch.py をサブプロセスで呼んで取り込む。
+        本文全文・サンプル動画はPlaywrightで実ページを開いて自動取得する（数秒〜十数秒かかる）。
+        req に description があれば --description で渡す（自動取得が失敗したときの手動上書き用。
+        現在のUIからは送られないが、後方互換のため残す）。"""
+        token = (req.get("url") or "").strip()
+        description = (req.get("description") or "").strip()
+        if not token:
+            return self._json(400, {"ok": False, "error": "URLを入力してください"})
+        try:
+            before = {e["cid"] for e in BB.collect()}
+            cmd = [sys.executable, FETCH_PY, token]
+            if description:
+                cmd += ["--description", description]
+            print(f"  ⬇ 取り込み開始: {token}")
+            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, timeout=120)
+            log_tail = (r.stdout or "")[-1500:]
+
+            after_entries = BB.collect()
+            new_cids = {e["cid"] for e in after_entries} - before
+            if not new_cids:
+                print(log_tail)
+                return self._json(200, {"ok": False,
+                                        "error": "取り込めませんでした。既に登録済みか、"
+                                                 "URLが不正、または取得に失敗しました。",
+                                        "log": log_tail})
+
+            cid = next(iter(new_cids))
+            entry = next(e for e in after_entries if e["cid"] == cid)
+            BB.build_single(cid, regen=False)
+            DB.build_all()
+            print(f"  ✓ 取り込み完了: {cid}（{entry['title']}）")
+            return self._json(200, {"ok": True, "cid": cid, "title": entry["title"]})
+        except subprocess.TimeoutExpired:
+            return self._json(500, {"ok": False, "error": "処理がタイムアウトしました"})
+        except Exception as ex:
+            return self._json(500, {"ok": False, "error": str(ex)})
+
+    def _handle_import_video(self):
+        """プロジェクトのルートフォルダに置いた動画を、タイトル一致で対応する作品フォルダに
+        sample.mp4 として振り分ける（import_video.py）。"""
+        try:
+            entries = BB.collect()
+            result = IV.import_videos(C.PROJECT_ROOT, entries)
+            for m in result["moved"]:
+                print(f"  ✓ 動画取り込み: {m['file']} → {m['dir']}/sample.mp4")
+            if result["moved"]:
+                for cid in {e["cid"] for e in entries
+                           if any(m["dir"] == e["dir"].name for m in result["moved"])}:
+                    BB.build_single(cid, regen=False)
+                DB.build_all()
+            return self._json(200, {"ok": True, **result})
+        except Exception as ex:
+            return self._json(500, {"ok": False, "error": str(ex)})
 
 
 def main(argv) -> int:
     args = [a for a in argv[1:] if not a.startswith("-")]
-    if not args:
-        print("使い方: python3 fanza_auto/scripts/serve_board.py <cid> [ポート]")
-        print("  例) python3 fanza_auto/scripts/serve_board.py debz015")
-        return 1
-    cid = args[0]
-    port = int(args[1]) if len(args) >= 2 else 8000
+    port = int(args[0]) if args and args[0].isdigit() else 8000
 
-    cfg = C.load_config(require_api=False)
-    out = BB.build_single(cid, cfg, regen=False)
-    if out is None:
-        return 1
+    out = DB.build_all()
 
     url = f"http://127.0.0.1:{port}/{out.name}"
     handler = functools.partial(Handler)
@@ -451,12 +492,12 @@ def main(argv) -> int:
         httpd = http.server.ThreadingHTTPServer(("", port), handler)
     except OSError as e:
         print(f"✗ ポート {port} が使えません（{e}）。別ポート例: "
-              f"python3 fanza_auto/scripts/serve_board.py {cid} 8001")
+              f"python3 myfans_auto/scripts/serve.py 8001")
         return 1
 
     print(f"\n▶ 開く: {url}")
     print(f"  スマホ等からは: http://{lan_ip()}:{port}/{out.name}")
-    print("  「✂ 切り抜く」でこのサーバーが動画をカットします。")
+    print("  ここで動画の切り抜き・アーカイブ・URL/動画取り込みが使えます。")
     print("  止めるとき: Ctrl+C\n")
     webbrowser.open(url)
     try:

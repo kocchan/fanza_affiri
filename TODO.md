@@ -33,6 +33,93 @@
 
 ## ✅ 完了
 
+- [x] **FANZAボードにも作品説明の自動取得＋メイン投稿の編集保存を追加（MyFansと同機能に）**
+  MyFans側で先に作った「取り込み時に説明文も取得して個別ページで見られる」「メイン投稿文を
+  テキストエリアで直接編集→💾保存」をFANZA側にも同様に実装。`fetch_and_build.py`に
+  Playwrightで商品ページのJSON-LD（`@type: Product`の`description`）を取る
+  `fetch_description()`を追加し`item.json`に`description`保存。`build_board.py`の
+  個別ページ（`single=True`時のみ）に説明文ブロックと編集可能な`main_block()`
+  （テキストエリア＋💾保存＋「作り直しはチャットで直接指示」の注意書き）を追加。
+  `serve_board.py`に`/__save_post`エンドポイントを追加し`posts.json`へ保存
+  （`serve_schedule.py`からも継承済みで動く）。実データ（deas049）で説明文取得・保存を
+  実機確認し、テスト保存分は`build_board.py --regen`で元のキャプションに復元済み。
+  ドキュメントも更新：`fanza_auto/README.md`と`.claude/skills/fanza-content/SKILL.md`。
+- [x] **MyFansの「🔄 AI再生成」ボタンを撤去（チャット直接指示に一本化）**
+  ユーザーから「再生成ボタンを押したらClaude Code（このチャット）が反映される作りにできるか」
+  と聞かれ、技術的に不可能と回答（ダッシュボードは別プロセスのHTTPサーバーで、私はチャットで
+  呼ばれた時しか動けないため、ボタン押下→即座に私が起動、は実現できない）。ユーザー了承の上、
+  「🔄 AI再生成」ボタン・単語入力欄・`/__regen_caption`エンドポイント・`caption.py`の
+  `build_from_keywords()`をすべて削除し、代わりに「文章を作り直したいときはチャットで直接
+  指示してください」という注意書きに置き換え。💾保存ボタン（手動編集の保存）は維持。
+  取り込み時の自動キャプション生成（`caption.py`の`build_main_text`）はそのまま残す
+  （これは「作り直し」ではなく初期値づけなので対象外）。
+- [x] **MyFansキャプションの型をカテゴリ分け＋実例ナレッジ化**
+  ユーザーから実例5本（「インドア美少女との密会がこれ」「同窓会で久々に再会したらこうなるｗｗ」
+  「野球拳で負けちゃう〇学校教師さんｗｗｗ」等）を提示され「これを参考にする仕組みに」と依頼。
+  実例を`ナレッジ/コンテンツ/X運用ナレッジ_MyFansキャプション型.md`に保存（FANZA側の
+  `X運用ナレッジ_勝ち型（バズ型）.md`に相当するMyFans版。ナレッジ→実装の順を保つ）。
+  `caption.py`の`TEMPLATES`を単一プールからカテゴリ別（place/event/game/person）に再構成し、
+  「同窓会との密会がこれ」のような文法的に不自然な組み合わせを排除。`SAFE_SITUATIONS`にも
+  カテゴリを付与（W杯/野球拳/忘年会/新年会を追加）。`build_from_keywords`（AI再生成の自由入力）
+  は許可リストに無い単語でも簡易ヒント（「会」→event、「拳」→game、「女/子/さん」等→person）
+  でカテゴリを推測するように。実例と近い出力（「野球拳で負けちゃう子ｗｗｗ」等）を確認済み。
+- [x] **MyFansのメイン投稿文を個別ページで自由編集＋AI再生成できるように**
+  ユーザーから「メイン投稿文を自分で編集して保存ボタンで反映したい、追加で単語を入れて
+  AI再生成するボタンも欲しい」と要望。個別ページのメイン投稿ブロックを読み取り専用`<pre>`から
+  `<textarea>`に変更し、「💾 保存」（`/__save_post`）と「🔄 AI再生成」（`/__regen_caption`、
+  単語欄＋ボタン）を追加。`board.py`に`set_main_text(cid, text)`（`posts.json`のmainだけ上書き）、
+  `caption.py`に`build_from_keywords()`（入力単語から1つ選びテンプレートに当てはめる。本文からの
+  自動抽出とは別ルート）を追加。保存・再生成どちらも`_rebuild_board()`で個別ページ・全体ボード
+  両方を再生成するので、全体ボード側にも即反映される。コピー機能もtextarea対応
+  （`.textContent`は編集を反映しないため`.value`を見るよう修正）。実エンドポイントで動作確認済み。
+- [x] **MyFansのメイン投稿文を、本文から場所・シチュエーションを拾って作るように（`caption.py`）**
+  個別ページに本文（description）のコピー用ブロックを追加した流れで、ユーザーから「本文から
+  『お泊まり会』『エアビー』のような要素を拾って、wwwを使う短いあるある反応文にしてほしい」と
+  要望。既存の`post_text.py`（FANZA用）は評価/ジャンル/発売日という構造化データ前提で
+  MyFansには使えないため、`myfans_auto/scripts/caption.py`を新規作成：本文から
+  「場所・シチュエーション」だけを許可リスト方式で拾う（`SAFE_SITUATIONS`＝エアビー/お泊まり/
+  ホテル/合コン/デート等。行為語・ハッシュタグ・未成年連想語は本文にあっても絶対に拾わない）→
+  短い反応文テンプレート（「ノリで{kw}した結果がこれwww」等）に当てはめる。該当語が無い投稿は
+  `templates.py`の`REACTION_HOOKS`固定文にフォールバック。伏字対応（「エ◯ビー」のように
+  記号を挟む表記）も正規表現で吸収。`board.py`の`ensure_posts()`でメイン投稿文だけこれに差し替え、
+  リンク投稿・賑やかしは引き続き`post_text.py`を流用。実データ（北岡果林の投稿＝「エアビー行ったら
+  そりゃこうなるよねwww」等）で動作確認済み。README/SKILL.md更新。
+- [x] **MyFansの本文全文・サンプル動画も自動取得に（Playwrightで年齢確認を通すだけ）**
+  ユーザーから「本文をボード上で手動貼り付けするのは嫌、自動で取ってきてほしい」と要望があり調査。
+  og:descriptionはMyFans側で短く切られており、これまでは自動取得できないと判断していたが、
+  実際にPlaywrightで投稿ページを開いて検証したところ、**年齢確認「はい」をクリックするだけ**
+  （ログイン不要・誰でも通す標準導線でボット対策ではない）で、本文全文（DOM上の実テキスト。
+  line-clampで見た目は省略されていてもtextContentは全文を持つ）と、**無料公開サンプル動画**
+  （`content.mfcdn.jp`の公開HLS配信・ログイン/購入なしで200が返る）が取得できることを確認。
+  ログイン自動化（`myfans_login.py`、削除済み）はCloudflare Turnstileに阻まれたが、
+  ログインしない匿名ページ閲覧は何も検知されない、という違いがポイント。
+  `myfans_fetch.py`を全面改修：①requestsで軽量にog:image/post_id解決→②Playwrightで
+  年齢確認突破→本文全文をtitle_prefixからの前方一致で検索（Tailwindクラス名に依存しない
+  頑健な方式）→③サンプル動画のm3u8 URLをネットワーク応答から捕捉しffmpegで`sample.mp4`化
+  （`-user_agent`/`-headers Referer`必須。無いとCDNに403される）。②が失敗しても①の結果のみで
+  続行する設計（壊れやすい部分を落としても全体は動く）。タイトルも本文1行目から取るように変更し
+  従来の"..."切れを解消。ダッシュボードの本文貼り付けテキストエリアは不要になったため削除、
+  ①②③のステップ表示も「①URL貼り付け（自動で全部取得）／②③（任意・本編が要る時だけ）」に更新。
+  `--description`手動上書きはCLI保険用として残す。README/SKILL.md更新。
+- [x] **MyFans専用ダッシュボード（`myfans_auto/`）を新設・FANZAとは別ボードに**
+  当初はFANZAの `works/board.html` にMyFansも混在させる案で実装したが、DMMとMyFansはアフィリエイトの
+  仕組み（クリエイターごとに別アフィリンク・APIなし）や投稿元データが大きく異なり運用感が合わないため、
+  ユーザー指示で完全に別プロジェクト `myfans_auto/`（`fanza_auto/`と同じ構成：`works/`・`scripts/`）に分離。
+  `fanza_auto/scripts/{build_board,schedule_board,serve_board,common}.py` はFANZA向けの状態に完全revert
+  （`git checkout --`）。`myfans_auto/scripts/` に `common.py`（軽量版）・`board.py`（旧build_board.py相当）・
+  `dashboard.py`（旧schedule_board.py相当）・`serve.py`（旧serve_board+serve_schedule統合・MissAV除去）・
+  `myfans_fetch.py`（投稿URLの公開OGPメタタグだけを読む取り込み。ログイン不要・タイトル/説明文/サムネ画像のみ）・
+  `import_video.py`（新規）・`cut_video.py`等の切り抜き4本（fanza_autoからコピーし完全独立）を新規作成。
+  投稿文生成（`post_text.py`/`templates.py`）は空データに自動フォールバックする既存挙動を活かし
+  `fanza_auto/scripts/`からsys.path経由でそのまま再利用（書き直さず）。
+  **動画の自動取得は断念**：Playwrightでのログイン自動化（`myfans_login.py`）を試したが、
+  ログイン画面のCloudflare Turnstileが自動化ブラウザを検知し失敗（検証済み・スクショで確認）。
+  回避技術（フィンガープリント偽装等）はプラットフォームの意図的な自動化対策を突破する行為のため不実装。
+  → 運用は「①URLでタイトル/サムネ取込→②人がChrome拡張機能（FetchV Video Download等）で動画を保存し
+  プロジェクトルートに置く→③ボードの『🎬 動画を取り込む』ボタンでタイトル一致の作品フォルダへ
+  `sample.mp4`として自動振り分け」の3段構成に（`import_video.py`のタイトル前方一致マッチングで実装・
+  実データで動作確認済み）。新スキル `/myfans-content` を追加、`myfans_auto/README.md`・ルート`README.md`・
+  `.claude/skills/fanza-content/SKILL.md`（MyFans混在記述を削除しリンクだけ残す）を更新。
 - [x] **投稿ボードを日付フォルダ方式から全体ボード＋アーカイブ方式に戻す**
   「日付ごとのボード」をやめ、`works/board.html`（全作品）＋`works/archive.html`（アーカイブ済み）の
   2枚構成に統合。もともとSKILL.md/README.mdは「日付フォルダは作らない」設計のままで、
